@@ -58,7 +58,7 @@ var (
 	allowedRootMD = map[string]bool{
 		"README.md": true, "CLAUDE.md": true, "CHANGELOG.md": true,
 		"LICENSE.md": true, "CONTRIBUTING.md": true, "SECURITY.md": true,
-		"CODE_OF_CONDUCT.md": true, "RTK.md": true,
+		"CODE_OF_CONDUCT.md": true, "RTK.md": true, "AGENTS.md": true,
 	}
 	// Scaffold files: tracked files that are leftover from project init (e.g., Vite, CRA).
 	scaffoldFiles = map[string]bool{
