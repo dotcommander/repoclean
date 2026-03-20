@@ -1,4 +1,4 @@
-package main
+package cleanup
 
 import (
 	"context"
@@ -8,8 +8,6 @@ import (
 	"regexp"
 	"strings"
 	"time"
-
-	"github.com/dotcommander/repoclean/internal/cleanup"
 )
 
 var (
@@ -78,7 +76,7 @@ var (
 	untrackDirs = []string{"dist/", "build/", "out/", "target/"}
 )
 
-func isDeleteCandidate(f *cleanup.FileInfo) (bool, string) {
+func isDeleteCandidate(f *FileInfo) (bool, string) {
 	name := filepath.Base(f.RelPath)
 
 	if strings.HasPrefix(name, ".looper") {
@@ -105,7 +103,7 @@ func isDeleteCandidate(f *cleanup.FileInfo) (bool, string) {
 	return false, ""
 }
 
-func isDevArtifact(f *cleanup.FileInfo) bool {
+func isDevArtifact(f *FileInfo) bool {
 	if !f.Tracked || f.IsDir {
 		return false
 	}
@@ -129,7 +127,7 @@ func isDevArtifact(f *cleanup.FileInfo) bool {
 	return false
 }
 
-func isMisplacedDoc(f *cleanup.FileInfo) bool {
+func isMisplacedDoc(f *FileInfo) bool {
 	if f.IsDir || !f.Tracked {
 		return false
 	}
@@ -146,7 +144,7 @@ func isMisplacedDoc(f *cleanup.FileInfo) bool {
 	return true
 }
 
-func isUntrackCandidate(f *cleanup.FileInfo) (bool, string) {
+func isUntrackCandidate(f *FileInfo) (bool, string) {
 	if !f.Tracked || f.IsDir || f.IsSymlink {
 		return false, ""
 	}
@@ -178,7 +176,7 @@ func isUntrackCandidate(f *cleanup.FileInfo) (bool, string) {
 		!strings.HasPrefix(f.RelPath, "hooks/") {
 		return true, "compiled binary"
 	}
-	if f.Content == cleanup.ContentGenerated {
+	if f.Content == ContentGenerated {
 		return true, "generated content"
 	}
 	return false, ""
@@ -198,7 +196,7 @@ func normalizeDocName(name string) string {
 	return normalized
 }
 
-func needsDocRename(f *cleanup.FileInfo) (string, bool) {
+func needsDocRename(f *FileInfo) (string, bool) {
 	if f.IsDir || !strings.HasPrefix(f.RelPath, "docs/") {
 		return "", false
 	}
@@ -209,7 +207,7 @@ func needsDocRename(f *cleanup.FileInfo) (string, bool) {
 	return "", false
 }
 
-func isMisplacedScript(f *cleanup.FileInfo) bool {
+func isMisplacedScript(f *FileInfo) bool {
 	if f.IsDir || f.IsSymlink {
 		return false
 	}
@@ -276,37 +274,18 @@ func findGoBinLinked() map[string]bool {
 
 func boolPtr(b bool) *bool { return &b }
 
-func ignoredFileReason(name, ext string, f *cleanup.FileInfo) string {
-	switch {
-	case f.Executable && ext == "":
-		return "ignored compiled binary"
-	case f.Executable && ext == ".test":
-		return "ignored test binary"
-	case strings.HasPrefix(name, "coverage") || ext == ".out":
-		return "ignored coverage output"
-	case ext == ".html":
-		return "ignored generated file"
-	case ext == ".md":
-		return "ignored dev document"
-	case ext == ".sh":
-		return "ignored script"
-	default:
-		return "ignored file on disk"
-	}
-}
-
-func categorize(files []cleanup.FileInfo, cfg cleanup.Config) cleanup.ScanResult {
-	result := cleanup.ScanResult{
-		DeleteCandidates:      []cleanup.FileCandidate{},
-		DevArtifactCandidates: []cleanup.FileCandidate{},
-		ArchiveCandidates:     []cleanup.FileCandidate{},
-		BrokenLinks:           []cleanup.FileCandidate{},
-		LargeFiles:            []cleanup.FileCandidate{},
-		MisplacedScripts:      []cleanup.FileCandidate{},
-		MisplacedDocs:         []cleanup.FileCandidate{},
-		UntrackCandidates:     []cleanup.FileCandidate{},
-		RenameDocs:            []cleanup.FileCandidate{},
-		AllFiles:              []cleanup.LabeledFile{},
+func Categorize(files []FileInfo, cfg Config) ScanResult {
+	result := ScanResult{
+		DeleteCandidates:      []FileCandidate{},
+		DevArtifactCandidates: []FileCandidate{},
+		ArchiveCandidates:     []FileCandidate{},
+		BrokenLinks:           []FileCandidate{},
+		LargeFiles:            []FileCandidate{},
+		MisplacedScripts:      []FileCandidate{},
+		MisplacedDocs:         []FileCandidate{},
+		UntrackCandidates:     []FileCandidate{},
+		RenameDocs:            []FileCandidate{},
+		AllFiles:              []LabeledFile{},
 		Summary:               map[string]int{},
 	}
 
@@ -320,9 +299,9 @@ func categorize(files []cleanup.FileInfo, cfg cleanup.Config) cleanup.ScanResult
 	referencedScripts := findReferencedScripts(cfg.Path, scriptNames)
 	goBinLinked := findGoBinLinked()
 
-	addResult := func(slice *[]cleanup.FileCandidate, c cleanup.FileCandidate, status, reason string) {
+	addResult := func(slice *[]FileCandidate, c FileCandidate, status, reason string) {
 		*slice = append(*slice, c)
-		result.AllFiles = append(result.AllFiles, cleanup.LabeledFile{
+		result.AllFiles = append(result.AllFiles, LabeledFile{
 			File: c.File, Status: status, Reason: reason, SizeKB: c.SizeKB,
 		})
 	}
@@ -363,17 +342,17 @@ func categorize(files []cleanup.FileInfo, cfg cleanup.Config) cleanup.ScanResult
 			if inSafeDir {
 				// Exception: non-primary files in bin/ (primary is protected by goBinLinked).
 				if strings.HasPrefix(f.RelPath, "bin/") && ext == "" {
-					addResult(&result.DeleteCandidates, cleanup.FileCandidate{
+					addResult(&result.DeleteCandidates, FileCandidate{
 						File: f.RelPath, Reason: "ignored stale binary", SizeKB: f.Size / 1024,
-					}, cleanup.StatusDelete, "ignored stale binary")
+					}, StatusDelete, "ignored stale binary")
 				}
 				continue
 			}
 			// Backup files (*.backup.*)
 			if strings.Contains(name, ".backup.") {
-				addResult(&result.DeleteCandidates, cleanup.FileCandidate{
+				addResult(&result.DeleteCandidates, FileCandidate{
 					File: f.RelPath, Reason: "ignored backup file", SizeKB: f.Size / 1024,
-				}, cleanup.StatusDelete, "ignored backup file")
+				}, StatusDelete, "ignored backup file")
 				continue
 			}
 			// Dev doc patterns at any depth
@@ -385,41 +364,42 @@ func categorize(files []cleanup.FileInfo, cfg cleanup.Config) cleanup.ScanResult
 				}
 			}
 			if isDevDoc {
-				addResult(&result.DeleteCandidates, cleanup.FileCandidate{
+				addResult(&result.DeleteCandidates, FileCandidate{
 					File: f.RelPath, Reason: "ignored dev document", SizeKB: f.Size / 1024,
-				}, cleanup.StatusDelete, "ignored dev document")
+				}, StatusDelete, "ignored dev document")
 				continue
 			}
 			// Verify scripts, archive files at root
 			isRootLevel := !strings.Contains(f.RelPath, "/")
 			if isRootLevel {
+				isDeletePrefix := false
 				for _, pfx := range ignoredDeletePrefixes {
 					if strings.HasPrefix(name, pfx) {
-						addResult(&result.DeleteCandidates, cleanup.FileCandidate{
+						addResult(&result.DeleteCandidates, FileCandidate{
 							File: f.RelPath, Reason: "ignored dev script", SizeKB: f.Size / 1024,
-						}, cleanup.StatusDelete, "ignored dev script")
-						isDevDoc = true // reuse flag to skip
+						}, StatusDelete, "ignored dev script")
+						isDeletePrefix = true
 						break
 					}
 				}
-				if isDevDoc {
+				if isDeletePrefix {
 					continue
 				}
 				// Temp files at root → delete
 				if deleteExts[ext] {
-					addResult(&result.DeleteCandidates, cleanup.FileCandidate{
+					addResult(&result.DeleteCandidates, FileCandidate{
 						File: f.RelPath, Reason: "ignored temp file", SizeKB: f.Size / 1024,
-					}, cleanup.StatusDelete, "ignored temp file")
+					}, StatusDelete, "ignored temp file")
 					continue
 				}
 				// Archive files at root → move to .work/
 				if archiveExts[ext] {
-					addResult(&result.ArchiveCandidates, cleanup.FileCandidate{
+					addResult(&result.ArchiveCandidates, FileCandidate{
 						File:   f.RelPath,
 						Reason: "archive file at repo root",
 						SizeKB: f.Size / 1024,
-						Score:  cleanup.Score(f),
-					}, cleanup.StatusArchive, "archive file at repo root")
+						Score:  Score(f),
+					}, StatusArchive, "archive file at repo root")
 					continue
 				}
 			}
@@ -429,8 +409,8 @@ func categorize(files []cleanup.FileInfo, cfg cleanup.Config) cleanup.ScanResult
 
 		// 0. Migration files are source code, not data artifacts — always clean.
 		if !f.IsDir && (strings.Contains(f.RelPath, "/migrations/") || strings.HasPrefix(f.RelPath, "migrations/")) {
-			result.AllFiles = append(result.AllFiles, cleanup.LabeledFile{
-				File: f.RelPath, Status: cleanup.StatusClean, SizeKB: f.Size / 1024,
+			result.AllFiles = append(result.AllFiles, LabeledFile{
+				File: f.RelPath, Status: StatusClean, SizeKB: f.Size / 1024,
 			})
 			continue
 		}
@@ -441,117 +421,117 @@ func categorize(files []cleanup.FileInfo, cfg cleanup.Config) cleanup.ScanResult
 			if f.Tracked {
 				reason = "⚠ DATA FILE (tracked) — may contain important data"
 			}
-			addResult(&result.ArchiveCandidates, cleanup.FileCandidate{
+			addResult(&result.ArchiveCandidates, FileCandidate{
 				File:        f.RelPath,
 				Reason:      reason,
 				SizeKB:      f.Size / 1024,
-				Score:       cleanup.Score(f),
+				Score:       Score(f),
 				ContentHint: "data",
-			}, cleanup.StatusArchive, reason)
+			}, StatusArchive, reason)
 			continue
 		}
 
 		// 1b. Scaffold remnants (tracked files from project init with zero references)
 		if f.Tracked && scaffoldFiles[f.RelPath] {
-			addResult(&result.DeleteCandidates, cleanup.FileCandidate{
+			addResult(&result.DeleteCandidates, FileCandidate{
 				File:   f.RelPath,
 				Reason: "scaffold remnant",
 				SizeKB: f.Size / 1024,
-				Score:  cleanup.Score(f),
-			}, cleanup.StatusDelete, "scaffold remnant")
+				Score:  Score(f),
+			}, StatusDelete, "scaffold remnant")
 			continue
 		}
 
 		// 2. Delete candidates
 		if ok, reason := isDeleteCandidate(f); ok {
-			addResult(&result.DeleteCandidates, cleanup.FileCandidate{
+			addResult(&result.DeleteCandidates, FileCandidate{
 				File:   f.RelPath,
 				Reason: reason,
 				SizeKB: f.Size / 1024,
-				Score:  cleanup.Score(f),
-			}, cleanup.StatusDelete, reason)
+				Score:  Score(f),
+			}, StatusDelete, reason)
 			continue
 		}
 
-		// 2. Broken links
+		// 3. Broken links
 		if f.IsSymlink && f.LinkTarget != "" {
-			addResult(&result.BrokenLinks, cleanup.FileCandidate{
+			addResult(&result.BrokenLinks, FileCandidate{
 				File:   f.RelPath,
 				SizeKB: f.Size / 1024,
 				Target: f.LinkTarget,
-				Score:  cleanup.Score(f),
-			}, cleanup.StatusBrokenLink, "broken symlink → "+f.LinkTarget)
+				Score:  Score(f),
+			}, StatusBrokenLink, "broken symlink → "+f.LinkTarget)
 			continue
 		}
 
-		// 3. Large files (>10MB), not matching delete patterns
+		// 4. Large files (>10MB), not matching delete patterns
 		if f.Size > 10*1024*1024 && !f.IsDir {
-			addResult(&result.LargeFiles, cleanup.FileCandidate{
+			addResult(&result.LargeFiles, FileCandidate{
 				File:    f.RelPath,
 				SizeKB:  f.Size / 1024,
 				Tracked: boolPtr(f.Tracked),
-				Score:   cleanup.Score(f),
-			}, cleanup.StatusLargeFile, "file > 10MB")
+				Score:   Score(f),
+			}, StatusLargeFile, "file > 10MB")
 			continue
 		}
 
-		// 4. Dev artifacts (tracked files matching patterns)
+		// 5. Dev artifacts (tracked files matching patterns)
 		if isDevArtifact(f) {
-			addResult(&result.DevArtifactCandidates, cleanup.FileCandidate{
+			addResult(&result.DevArtifactCandidates, FileCandidate{
 				File:   f.RelPath,
 				Reason: "tracked dev artifact",
 				SizeKB: f.Size / 1024,
-				Score:  cleanup.Score(f),
-			}, cleanup.StatusDevArtifact, "tracked dev artifact")
+				Score:  Score(f),
+			}, StatusDevArtifact, "tracked dev artifact")
 			continue
 		}
 
-		// 5. Misplaced docs (tracked .md at repo root, not allowlisted)
+		// 6. Misplaced docs (tracked .md at repo root, not allowlisted)
 		if isMisplacedDoc(f) {
-			addResult(&result.MisplacedDocs, cleanup.FileCandidate{
+			addResult(&result.MisplacedDocs, FileCandidate{
 				File:   f.RelPath,
 				Reason: "root .md → docs/",
 				SizeKB: f.Size / 1024,
-				Score:  cleanup.Score(f),
-			}, cleanup.StatusMisplacedDoc, "root .md → docs/")
+				Score:  Score(f),
+			}, StatusMisplacedDoc, "root .md → docs/")
 			continue
 		}
 
-		// 5b. Docs with non-normalized filenames (uppercase, underscores)
+		// 6b. Docs with non-normalized filenames (uppercase, underscores)
 		if newPath, ok := needsDocRename(f); ok {
-			addResult(&result.RenameDocs, cleanup.FileCandidate{
+			addResult(&result.RenameDocs, FileCandidate{
 				File:   f.RelPath,
 				Target: newPath,
 				SizeKB: f.Size / 1024,
-			}, cleanup.StatusRenameDoc, "rename → "+newPath)
+			}, StatusRenameDoc, "rename → "+newPath)
 			continue
 		}
 
-		// 6. Misplaced scripts (.sh at repo root level)
+		// 7. Misplaced scripts (.sh at repo root level)
 		if isMisplacedScript(f) {
 			referenced := referencedScripts[name]
-			addResult(&result.MisplacedScripts, cleanup.FileCandidate{
+			addResult(&result.MisplacedScripts, FileCandidate{
 				File:       f.RelPath,
 				SizeKB:     f.Size / 1024,
 				Tracked:    boolPtr(f.Tracked),
 				Referenced: boolPtr(referenced),
-				Score:      cleanup.Score(f),
-			}, cleanup.StatusMisplacedScript, "")
+				Score:      Score(f),
+			}, StatusMisplacedScript, "")
 			continue
 		}
 
-		// 7. Untrack candidates (tracked files that shouldn't be in git)
+		// 8. Untrack candidates (tracked files that shouldn't be in git)
 		if ok, reason := isUntrackCandidate(f); ok {
-			addResult(&result.UntrackCandidates, cleanup.FileCandidate{
+			addResult(&result.UntrackCandidates, FileCandidate{
 				File:   f.RelPath,
 				Reason: reason,
 				SizeKB: f.Size / 1024,
-				Score:  cleanup.Score(f),
-			}, cleanup.StatusUntrack, reason)
+				Score:  Score(f),
+			}, StatusUntrack, reason)
 			continue
 		}
 
-		// 8. Archive candidates (untracked, not caught above)
+		// 9. Archive candidates (untracked, not caught above)
 		if !f.Tracked && !f.IsDir {
 			hint := f.Content.String()
 			reason := "untracked file"
@@ -559,11 +539,11 @@ func categorize(files []cleanup.FileInfo, cfg cleanup.Config) cleanup.ScanResult
 				reason += ", potential duplicate of " + f.Duplicate
 			}
 
-			c := cleanup.FileCandidate{
+			c := FileCandidate{
 				File:   f.RelPath,
 				Reason: reason,
 				SizeKB: f.Size / 1024,
-				Score:  cleanup.Score(f),
+				Score:  Score(f),
 			}
 			if hint != "unknown" && hint != "meaningful" {
 				c.ContentHint = hint
@@ -571,7 +551,7 @@ func categorize(files []cleanup.FileInfo, cfg cleanup.Config) cleanup.ScanResult
 			if f.StaleDays > 0 {
 				c.StaleDays = f.StaleDays
 			}
-			addResult(&result.ArchiveCandidates, c, cleanup.StatusArchive, reason)
+			addResult(&result.ArchiveCandidates, c, StatusArchive, reason)
 			continue
 		}
 
@@ -581,20 +561,20 @@ func categorize(files []cleanup.FileInfo, cfg cleanup.Config) cleanup.ScanResult
 		}
 
 		// No action needed — file is clean.
-		result.AllFiles = append(result.AllFiles, cleanup.LabeledFile{
-			File: f.RelPath, Status: cleanup.StatusClean, SizeKB: f.Size / 1024,
+		result.AllFiles = append(result.AllFiles, LabeledFile{
+			File: f.RelPath, Status: StatusClean, SizeKB: f.Size / 1024,
 		})
 	}
 
-	result.Summary[cleanup.CatDelete] = len(result.DeleteCandidates)
-	result.Summary[cleanup.CatDevArtifact] = len(result.DevArtifactCandidates)
-	result.Summary[cleanup.CatArchive] = len(result.ArchiveCandidates)
-	result.Summary[cleanup.CatBrokenLink] = len(result.BrokenLinks)
-	result.Summary[cleanup.CatLargeFile] = len(result.LargeFiles)
-	result.Summary[cleanup.CatMisplaced] = len(result.MisplacedScripts)
-	result.Summary[cleanup.CatMisplacedDoc] = len(result.MisplacedDocs)
-	result.Summary[cleanup.CatUntrack] = len(result.UntrackCandidates)
-	result.Summary[cleanup.CatRenameDocs] = len(result.RenameDocs)
+	result.Summary[CatDelete] = len(result.DeleteCandidates)
+	result.Summary[CatDevArtifact] = len(result.DevArtifactCandidates)
+	result.Summary[CatArchive] = len(result.ArchiveCandidates)
+	result.Summary[CatBrokenLink] = len(result.BrokenLinks)
+	result.Summary[CatLargeFile] = len(result.LargeFiles)
+	result.Summary[CatMisplaced] = len(result.MisplacedScripts)
+	result.Summary[CatMisplacedDoc] = len(result.MisplacedDocs)
+	result.Summary[CatUntrack] = len(result.UntrackCandidates)
+	result.Summary[CatRenameDocs] = len(result.RenameDocs)
 	result.Summary["total"] = len(result.DeleteCandidates) + len(result.DevArtifactCandidates) +
 		len(result.ArchiveCandidates) + len(result.BrokenLinks) +
 		len(result.LargeFiles) + len(result.MisplacedScripts) + len(result.MisplacedDocs) +

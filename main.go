@@ -52,7 +52,7 @@ func main() {
 	cleanup.FindDuplicates(files)
 	cleanup.EmitFindings(files)
 
-	result := categorize(files, cfg)
+	result := cleanup.Categorize(files, cfg)
 	result.Path = absPath
 
 	if *confirm && !*apply {
