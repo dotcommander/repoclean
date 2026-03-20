@@ -7,7 +7,7 @@ Point it at any repo and it finds junk files, stale artifacts, misplaced docs, t
 ## Install
 
 ```bash
-go install vampire.sh/repoclean@latest
+go install github.com/dotcommander/repoclean@latest
 ```
 
 Or build from source:

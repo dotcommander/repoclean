@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"vampire.sh/repoclean/internal/cleanup"
+	"github.com/dotcommander/repoclean/internal/cleanup"
 )
 
 func main() {
