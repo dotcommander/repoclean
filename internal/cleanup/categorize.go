@@ -201,6 +201,14 @@ func needsDocRename(f *FileInfo) (string, bool) {
 		return "", false
 	}
 	name := filepath.Base(f.RelPath)
+	// README.md is conventional uppercase — never rename.
+	if strings.EqualFold(name, "readme.md") {
+		return "", false
+	}
+	// _test.go files follow Go convention — never rename.
+	if strings.HasSuffix(name, "_test.go") {
+		return "", false
+	}
 	if norm := normalizeDocName(name); norm != "" {
 		return filepath.Join(filepath.Dir(f.RelPath), norm), true
 	}
