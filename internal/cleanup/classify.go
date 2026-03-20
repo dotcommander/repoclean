@@ -1,12 +1,15 @@
 package cleanup
 
 import (
+	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 )
 
 var tsPattern = regexp.MustCompile(`\d{4}-\d{2}-\d{2}[T ]|^\[\d{4}-\d{2}`)
@@ -53,6 +56,7 @@ func Classify(files []FileInfo) error {
 		}()
 	}
 	wg.Wait()
+	enrichMIME(files)
 	return nil
 }
 
@@ -181,4 +185,66 @@ func isKVLine(l string) bool {
 
 func fileExt(path string) string {
 	return filepath.Ext(path)
+}
+
+// enrichMIME uses the file command to detect MIME types for files still at ContentUnknown.
+func enrichMIME(files []FileInfo) {
+	var indices []int
+	for i := range files {
+		f := &files[i]
+		if f.IsDir || f.IsSymlink || f.Content != ContentUnknown || f.Size <= 0 {
+			continue
+		}
+		indices = append(indices, i)
+	}
+	if len(indices) == 0 {
+		return
+	}
+
+	// Batch in groups of 50.
+	for start := 0; start < len(indices); start += 50 {
+		end := start + 50
+		if end > len(indices) {
+			end = len(indices)
+		}
+		batch := indices[start:end]
+
+		args := []string{"--mime-type", "-b"}
+		for _, idx := range batch {
+			args = append(args, files[idx].Path)
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		cmd := exec.CommandContext(ctx, "file", args...)
+		out, err := cmd.Output()
+		cancel()
+		if err != nil {
+			continue
+		}
+
+		lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+		for j, idx := range batch {
+			if j >= len(lines) {
+				break
+			}
+			mime := strings.TrimSpace(lines[j])
+			if cls := mimeToClass(mime); cls != ContentUnknown {
+				files[idx].Content = cls
+			}
+		}
+	}
+}
+
+func mimeToClass(mime string) ContentClass {
+	switch mime {
+	case "application/json",
+		"application/xml",
+		"text/xml",
+		"application/toml",
+		"application/x-yaml",
+		"text/x-yaml":
+		return ContentConfig
+	default:
+		return ContentUnknown
+	}
 }

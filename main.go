@@ -55,6 +55,7 @@ func main() {
 	}
 
 	cleanup.FindDuplicates(files)
+	cleanup.EmitFindings(files)
 
 	result := categorize(files, cfg)
 	result.Path = absPath
@@ -382,91 +383,81 @@ func runCommands(cmds []cleanupCmd, dir string) {
 	fmt.Printf("\ndone: %d executed, %d skipped, %d failed\n", executed, skipped, failed)
 }
 
+type reportSection struct {
+	Title  string // fmt format with one %d for count
+	Format string
+	Header []string
+	Rows   [][]string
+}
+
+func toAny(ss []string) []any {
+	out := make([]any, len(ss))
+	for i, s := range ss {
+		out[i] = s
+	}
+	return out
+}
+
+func printSections(w *os.File, sections []reportSection) {
+	for _, s := range sections {
+		if len(s.Rows) == 0 {
+			continue
+		}
+		fmt.Fprintf(w, s.Title+"\n", len(s.Rows))
+		fmt.Fprintf(w, s.Format, toAny(s.Header)...)
+		for _, row := range s.Rows {
+			fmt.Fprintf(w, s.Format, toAny(row)...)
+		}
+		fmt.Fprintln(w)
+	}
+}
+
 func printReport(result cleanup.ScanResult) {
 	w := os.Stdout
 	bar := strings.Repeat("\u2550", 30)
 	fmt.Fprintf(w, "Cleanup Plan \u2014 %s\n%s\n\n", result.Path, bar)
 
-	if len(result.DeleteCandidates) > 0 {
-		fmt.Fprintf(w, "DELETE (%d files)\n", len(result.DeleteCandidates))
-		fmt.Fprintf(w, "  %-8s %-30s %-20s %s\n", "Action", "File", "Reason", "Size")
-		for _, c := range result.DeleteCandidates {
-			fmt.Fprintf(w, "  %-8s %-30s %-20s %s\n", "delete", c.File, c.Reason, fmtSize(c.SizeKB))
-		}
-		fmt.Fprintln(w)
+	sections := []reportSection{
+		{Title: "DELETE (%d files)", Format: "  %-8s %-30s %-20s %s\n", Header: []string{"Action", "File", "Reason", "Size"}},
+		{Title: "DEV ARTIFACTS (%d files \u2014 untrack + archive)", Format: "  %-8s %-30s %-20s %s\n", Header: []string{"Action", "File", "Reason", "Size"}},
+		{Title: "ARCHIVE (%d files \u2014 move to .work/archive/)", Format: "  %-8s %-30s %-20s %6s  %s\n", Header: []string{"Action", "File", "Reason", "Score", "Hint"}},
+		{Title: "LARGE FILES (%d file \u2014 manual review)", Format: "  %-8s %-30s %-10s %s\n", Header: []string{"Action", "File", "Size", "Tracked"}},
+		{Title: "MISPLACED DOCS (%d files \u2014 move to docs/)", Format: "  %-8s %-30s %s\n", Header: []string{"Action", "File", "Reason"}},
+		{Title: "RENAME DOCS (%d files \u2014 normalize filenames)", Format: "  %-8s %-40s %s\n", Header: []string{"Action", "File", "New Name"}},
+		{Title: "MISPLACED SCRIPTS (%d file)", Format: "  %-8s %-30s %-10s %s\n", Header: []string{"Action", "File", "Tracked", "Referenced"}},
+		{Title: "UNTRACK (%d files \u2014 should not be in git)", Format: "  %-8s %-30s %-25s %s\n", Header: []string{"Action", "File", "Reason", "Size"}},
+		{Title: "BROKEN LINKS (%d)", Format: "  %-8s %-30s %s\n", Header: []string{"Action", "File", "Target"}},
 	}
 
-	if len(result.DevArtifactCandidates) > 0 {
-		fmt.Fprintf(w, "DEV ARTIFACTS (%d files \u2014 untrack + archive)\n", len(result.DevArtifactCandidates))
-		fmt.Fprintf(w, "  %-8s %-30s %-20s %s\n", "Action", "File", "Reason", "Size")
-		for _, c := range result.DevArtifactCandidates {
-			fmt.Fprintf(w, "  %-8s %-30s %-20s %s\n", "git rm", c.File, c.Reason, fmtSize(c.SizeKB))
-		}
-		fmt.Fprintln(w)
+	for _, c := range result.DeleteCandidates {
+		sections[0].Rows = append(sections[0].Rows, []string{"delete", c.File, c.Reason, fmtSize(c.SizeKB)})
+	}
+	for _, c := range result.DevArtifactCandidates {
+		sections[1].Rows = append(sections[1].Rows, []string{"git rm", c.File, c.Reason, fmtSize(c.SizeKB)})
+	}
+	for _, c := range result.ArchiveCandidates {
+		sections[2].Rows = append(sections[2].Rows, []string{"archive", c.File, c.Reason, fmt.Sprintf("%d", c.Score), c.ContentHint})
+	}
+	for _, c := range result.LargeFiles {
+		sections[3].Rows = append(sections[3].Rows, []string{"review", c.File, fmtSize(c.SizeKB), boolStr(c.Tracked)})
+	}
+	for _, c := range result.MisplacedDocs {
+		sections[4].Rows = append(sections[4].Rows, []string{"move \u2192", c.File + " \u2192 docs/" + c.File, c.Reason})
+	}
+	for _, c := range result.RenameDocs {
+		sections[5].Rows = append(sections[5].Rows, []string{"rename", c.File, c.Target})
+	}
+	for _, c := range result.MisplacedScripts {
+		sections[6].Rows = append(sections[6].Rows, []string{"move \u2192", c.File + " \u2192 scripts/", boolStr(c.Tracked), boolStr(c.Referenced)})
+	}
+	for _, c := range result.UntrackCandidates {
+		sections[7].Rows = append(sections[7].Rows, []string{"untrack", c.File, c.Reason, fmtSize(c.SizeKB)})
+	}
+	for _, c := range result.BrokenLinks {
+		sections[8].Rows = append(sections[8].Rows, []string{"unlink", c.File, c.Target})
 	}
 
-	if len(result.ArchiveCandidates) > 0 {
-		fmt.Fprintf(w, "ARCHIVE (%d files \u2014 move to .work/archive/)\n", len(result.ArchiveCandidates))
-		fmt.Fprintf(w, "  %-8s %-30s %-20s %6s  %s\n", "Action", "File", "Reason", "Score", "Hint")
-		for _, c := range result.ArchiveCandidates {
-			fmt.Fprintf(w, "  %-8s %-30s %-20s %6d  %s\n", "archive", c.File, c.Reason, c.Score, c.ContentHint)
-		}
-		fmt.Fprintln(w)
-	}
-
-	if len(result.LargeFiles) > 0 {
-		fmt.Fprintf(w, "LARGE FILES (%d file \u2014 manual review)\n", len(result.LargeFiles))
-		fmt.Fprintf(w, "  %-8s %-30s %-10s %s\n", "Action", "File", "Size", "Tracked")
-		for _, c := range result.LargeFiles {
-			fmt.Fprintf(w, "  %-8s %-30s %-10s %s\n", "review", c.File, fmtSize(c.SizeKB), boolStr(c.Tracked))
-		}
-		fmt.Fprintln(w)
-	}
-
-	if len(result.MisplacedDocs) > 0 {
-		fmt.Fprintf(w, "MISPLACED DOCS (%d files — move to docs/)\n", len(result.MisplacedDocs))
-		fmt.Fprintf(w, "  %-8s %-30s %s\n", "Action", "File", "Reason")
-		for _, c := range result.MisplacedDocs {
-			fmt.Fprintf(w, "  %-8s %-30s %s\n", "move →", c.File+" → docs/"+c.File, c.Reason)
-		}
-		fmt.Fprintln(w)
-	}
-
-	if len(result.RenameDocs) > 0 {
-		fmt.Fprintf(w, "RENAME DOCS (%d files — normalize filenames)\n", len(result.RenameDocs))
-		fmt.Fprintf(w, "  %-8s %-40s %s\n", "Action", "File", "New Name")
-		for _, c := range result.RenameDocs {
-			fmt.Fprintf(w, "  %-8s %-40s %s\n", "rename", c.File, c.Target)
-		}
-		fmt.Fprintln(w)
-	}
-
-	if len(result.MisplacedScripts) > 0 {
-		fmt.Fprintf(w, "MISPLACED SCRIPTS (%d file)\n", len(result.MisplacedScripts))
-		fmt.Fprintf(w, "  %-8s %-30s %-10s %s\n", "Action", "File", "Tracked", "Referenced")
-		for _, c := range result.MisplacedScripts {
-			fmt.Fprintf(w, "  %-8s %-30s %-10s %s\n", "move \u2192", c.File+" \u2192 scripts/", boolStr(c.Tracked), boolStr(c.Referenced))
-		}
-		fmt.Fprintln(w)
-	}
-
-	if len(result.UntrackCandidates) > 0 {
-		fmt.Fprintf(w, "UNTRACK (%d files — should not be in git)\n", len(result.UntrackCandidates))
-		fmt.Fprintf(w, "  %-8s %-30s %-25s %s\n", "Action", "File", "Reason", "Size")
-		for _, c := range result.UntrackCandidates {
-			fmt.Fprintf(w, "  %-8s %-30s %-25s %s\n", "untrack", c.File, c.Reason, fmtSize(c.SizeKB))
-		}
-		fmt.Fprintln(w)
-	}
-
-	if len(result.BrokenLinks) > 0 {
-		fmt.Fprintf(w, "BROKEN LINKS (%d)\n", len(result.BrokenLinks))
-		fmt.Fprintf(w, "  %-8s %-30s %s\n", "Action", "File", "Target")
-		for _, c := range result.BrokenLinks {
-			fmt.Fprintf(w, "  %-8s %-30s %s\n", "unlink", c.File, c.Target)
-		}
-		fmt.Fprintln(w)
-	}
+	printSections(w, sections)
 
 	if len(result.AllFiles) > 0 {
 		fmt.Fprintf(w, "ALL FILES (%d)\n", len(result.AllFiles))
@@ -481,7 +472,6 @@ func printReport(result cleanup.ScanResult) {
 		fmt.Fprintln(w)
 	}
 
-	// Summary line — only categories with items.
 	var parts []string
 	if n := len(result.DeleteCandidates); n > 0 {
 		parts = append(parts, fmt.Sprintf("%d delete", n))
@@ -825,6 +815,13 @@ func categorize(files []cleanup.FileInfo, cfg cleanup.Config) cleanup.ScanResult
 	referencedScripts := findReferencedScripts(cfg.Path, scriptNames)
 	goBinLinked := findGoBinLinked()
 
+	addResult := func(slice *[]cleanup.FileCandidate, c cleanup.FileCandidate, status, reason string) {
+		*slice = append(*slice, c)
+		result.AllFiles = append(result.AllFiles, cleanup.LabeledFile{
+			File: c.File, Status: status, Reason: reason, SizeKB: c.SizeKB,
+		})
+	}
+
 	for i := range files {
 		f := &files[i]
 
@@ -861,23 +858,17 @@ func categorize(files []cleanup.FileInfo, cfg cleanup.Config) cleanup.ScanResult
 			if inSafeDir {
 				// Exception: non-primary files in bin/ (primary is protected by goBinLinked).
 				if strings.HasPrefix(f.RelPath, "bin/") && ext == "" {
-					result.DeleteCandidates = append(result.DeleteCandidates, cleanup.FileCandidate{
+					addResult(&result.DeleteCandidates, cleanup.FileCandidate{
 						File: f.RelPath, Reason: "ignored stale binary", SizeKB: f.Size / 1024,
-					})
-					result.AllFiles = append(result.AllFiles, cleanup.LabeledFile{
-						File: f.RelPath, Status: cleanup.StatusDelete, Reason: "ignored stale binary", SizeKB: f.Size / 1024,
-					})
+					}, cleanup.StatusDelete, "ignored stale binary")
 				}
 				continue
 			}
 			// Backup files (*.backup.*)
 			if strings.Contains(name, ".backup.") {
-				result.DeleteCandidates = append(result.DeleteCandidates, cleanup.FileCandidate{
+				addResult(&result.DeleteCandidates, cleanup.FileCandidate{
 					File: f.RelPath, Reason: "ignored backup file", SizeKB: f.Size / 1024,
-				})
-				result.AllFiles = append(result.AllFiles, cleanup.LabeledFile{
-					File: f.RelPath, Status: cleanup.StatusDelete, Reason: "ignored backup file", SizeKB: f.Size / 1024,
-				})
+				}, cleanup.StatusDelete, "ignored backup file")
 				continue
 			}
 			// Dev doc patterns at any depth
@@ -889,12 +880,9 @@ func categorize(files []cleanup.FileInfo, cfg cleanup.Config) cleanup.ScanResult
 				}
 			}
 			if isDevDoc {
-				result.DeleteCandidates = append(result.DeleteCandidates, cleanup.FileCandidate{
+				addResult(&result.DeleteCandidates, cleanup.FileCandidate{
 					File: f.RelPath, Reason: "ignored dev document", SizeKB: f.Size / 1024,
-				})
-				result.AllFiles = append(result.AllFiles, cleanup.LabeledFile{
-					File: f.RelPath, Status: cleanup.StatusDelete, Reason: "ignored dev document", SizeKB: f.Size / 1024,
-				})
+				}, cleanup.StatusDelete, "ignored dev document")
 				continue
 			}
 			// Verify scripts, archive files at root
@@ -902,12 +890,9 @@ func categorize(files []cleanup.FileInfo, cfg cleanup.Config) cleanup.ScanResult
 			if isRootLevel {
 				for _, pfx := range ignoredDeletePrefixes {
 					if strings.HasPrefix(name, pfx) {
-						result.DeleteCandidates = append(result.DeleteCandidates, cleanup.FileCandidate{
+						addResult(&result.DeleteCandidates, cleanup.FileCandidate{
 							File: f.RelPath, Reason: "ignored dev script", SizeKB: f.Size / 1024,
-						})
-						result.AllFiles = append(result.AllFiles, cleanup.LabeledFile{
-							File: f.RelPath, Status: cleanup.StatusDelete, Reason: "ignored dev script", SizeKB: f.Size / 1024,
-						})
+						}, cleanup.StatusDelete, "ignored dev script")
 						isDevDoc = true // reuse flag to skip
 						break
 					}
@@ -917,25 +902,19 @@ func categorize(files []cleanup.FileInfo, cfg cleanup.Config) cleanup.ScanResult
 				}
 				// Temp files at root → delete
 				if deleteExts[ext] {
-					result.DeleteCandidates = append(result.DeleteCandidates, cleanup.FileCandidate{
+					addResult(&result.DeleteCandidates, cleanup.FileCandidate{
 						File: f.RelPath, Reason: "ignored temp file", SizeKB: f.Size / 1024,
-					})
-					result.AllFiles = append(result.AllFiles, cleanup.LabeledFile{
-						File: f.RelPath, Status: cleanup.StatusDelete, Reason: "ignored temp file", SizeKB: f.Size / 1024,
-					})
+					}, cleanup.StatusDelete, "ignored temp file")
 					continue
 				}
 				// Archive files at root → move to .work/
 				if archiveExts[ext] {
-					result.ArchiveCandidates = append(result.ArchiveCandidates, cleanup.FileCandidate{
+					addResult(&result.ArchiveCandidates, cleanup.FileCandidate{
 						File:   f.RelPath,
 						Reason: "archive file at repo root",
 						SizeKB: f.Size / 1024,
 						Score:  cleanup.Score(f),
-					})
-					result.AllFiles = append(result.AllFiles, cleanup.LabeledFile{
-						File: f.RelPath, Status: cleanup.StatusArchive, Reason: "archive file at repo root", SizeKB: f.Size / 1024,
-					})
+					}, cleanup.StatusArchive, "archive file at repo root")
 					continue
 				}
 			}
@@ -944,7 +923,7 @@ func categorize(files []cleanup.FileInfo, cfg cleanup.Config) cleanup.ScanResult
 		}
 
 		// 0. Migration files are source code, not data artifacts — always clean.
-		if !f.IsDir && strings.Contains(f.RelPath, "/migrations/") {
+		if !f.IsDir && (strings.Contains(f.RelPath, "/migrations/") || strings.HasPrefix(f.RelPath, "migrations/")) {
 			result.AllFiles = append(result.AllFiles, cleanup.LabeledFile{
 				File: f.RelPath, Status: cleanup.StatusClean, SizeKB: f.Size / 1024,
 			})
@@ -957,144 +936,113 @@ func categorize(files []cleanup.FileInfo, cfg cleanup.Config) cleanup.ScanResult
 			if f.Tracked {
 				reason = "⚠ DATA FILE (tracked) — may contain important data"
 			}
-			result.ArchiveCandidates = append(result.ArchiveCandidates, cleanup.FileCandidate{
+			addResult(&result.ArchiveCandidates, cleanup.FileCandidate{
 				File:        f.RelPath,
 				Reason:      reason,
 				SizeKB:      f.Size / 1024,
 				Score:       cleanup.Score(f),
 				ContentHint: "data",
-			})
-			result.AllFiles = append(result.AllFiles, cleanup.LabeledFile{
-				File: f.RelPath, Status: cleanup.StatusArchive, Reason: reason, SizeKB: f.Size / 1024,
-			})
+			}, cleanup.StatusArchive, reason)
 			continue
 		}
 
 		// 1b. Scaffold remnants (tracked files from project init with zero references)
 		if f.Tracked && scaffoldFiles[f.RelPath] {
-			result.DeleteCandidates = append(result.DeleteCandidates, cleanup.FileCandidate{
+			addResult(&result.DeleteCandidates, cleanup.FileCandidate{
 				File:   f.RelPath,
 				Reason: "scaffold remnant",
 				SizeKB: f.Size / 1024,
 				Score:  cleanup.Score(f),
-			})
-			result.AllFiles = append(result.AllFiles, cleanup.LabeledFile{
-				File: f.RelPath, Status: cleanup.StatusDelete, Reason: "scaffold remnant", SizeKB: f.Size / 1024,
-			})
+			}, cleanup.StatusDelete, "scaffold remnant")
 			continue
 		}
 
 		// 2. Delete candidates
 		if ok, reason := isDeleteCandidate(f); ok {
-			result.DeleteCandidates = append(result.DeleteCandidates, cleanup.FileCandidate{
+			addResult(&result.DeleteCandidates, cleanup.FileCandidate{
 				File:   f.RelPath,
 				Reason: reason,
 				SizeKB: f.Size / 1024,
 				Score:  cleanup.Score(f),
-			})
-			result.AllFiles = append(result.AllFiles, cleanup.LabeledFile{
-				File: f.RelPath, Status: cleanup.StatusDelete, Reason: reason, SizeKB: f.Size / 1024,
-			})
+			}, cleanup.StatusDelete, reason)
 			continue
 		}
 
 		// 2. Broken links
 		if f.IsSymlink && f.LinkTarget != "" {
-			result.BrokenLinks = append(result.BrokenLinks, cleanup.FileCandidate{
+			addResult(&result.BrokenLinks, cleanup.FileCandidate{
 				File:   f.RelPath,
 				SizeKB: f.Size / 1024,
 				Target: f.LinkTarget,
 				Score:  cleanup.Score(f),
-			})
-			result.AllFiles = append(result.AllFiles, cleanup.LabeledFile{
-				File: f.RelPath, Status: cleanup.StatusBrokenLink, Reason: "broken symlink → " + f.LinkTarget, SizeKB: f.Size / 1024,
-			})
+			}, cleanup.StatusBrokenLink, "broken symlink → "+f.LinkTarget)
 			continue
 		}
 
 		// 3. Large files (>10MB), not matching delete patterns
 		if f.Size > 10*1024*1024 && !f.IsDir {
-			tracked := f.Tracked
-			result.LargeFiles = append(result.LargeFiles, cleanup.FileCandidate{
+			addResult(&result.LargeFiles, cleanup.FileCandidate{
 				File:    f.RelPath,
 				SizeKB:  f.Size / 1024,
-				Tracked: boolPtr(tracked),
+				Tracked: boolPtr(f.Tracked),
 				Score:   cleanup.Score(f),
-			})
-			result.AllFiles = append(result.AllFiles, cleanup.LabeledFile{
-				File: f.RelPath, Status: cleanup.StatusLargeFile, Reason: "file > 10MB", SizeKB: f.Size / 1024,
-			})
+			}, cleanup.StatusLargeFile, "file > 10MB")
 			continue
 		}
 
 		// 4. Dev artifacts (tracked files matching patterns)
 		if isDevArtifact(f) {
-			result.DevArtifactCandidates = append(result.DevArtifactCandidates, cleanup.FileCandidate{
+			addResult(&result.DevArtifactCandidates, cleanup.FileCandidate{
 				File:   f.RelPath,
 				Reason: "tracked dev artifact",
 				SizeKB: f.Size / 1024,
 				Score:  cleanup.Score(f),
-			})
-			result.AllFiles = append(result.AllFiles, cleanup.LabeledFile{
-				File: f.RelPath, Status: cleanup.StatusDevArtifact, Reason: "tracked dev artifact", SizeKB: f.Size / 1024,
-			})
+			}, cleanup.StatusDevArtifact, "tracked dev artifact")
 			continue
 		}
 
 		// 5. Misplaced docs (tracked .md at repo root, not allowlisted)
 		if isMisplacedDoc(f) {
-			result.MisplacedDocs = append(result.MisplacedDocs, cleanup.FileCandidate{
+			addResult(&result.MisplacedDocs, cleanup.FileCandidate{
 				File:   f.RelPath,
 				Reason: "root .md → docs/",
 				SizeKB: f.Size / 1024,
 				Score:  cleanup.Score(f),
-			})
-			result.AllFiles = append(result.AllFiles, cleanup.LabeledFile{
-				File: f.RelPath, Status: cleanup.StatusMisplacedDoc, Reason: "root .md → docs/", SizeKB: f.Size / 1024,
-			})
+			}, cleanup.StatusMisplacedDoc, "root .md → docs/")
 			continue
 		}
 
 		// 5b. Docs with non-normalized filenames (uppercase, underscores)
 		if newPath, ok := needsDocRename(f); ok {
-			result.RenameDocs = append(result.RenameDocs, cleanup.FileCandidate{
+			addResult(&result.RenameDocs, cleanup.FileCandidate{
 				File:   f.RelPath,
 				Target: newPath,
 				SizeKB: f.Size / 1024,
-			})
-			result.AllFiles = append(result.AllFiles, cleanup.LabeledFile{
-				File: f.RelPath, Status: cleanup.StatusRenameDoc, Reason: "rename → " + newPath, SizeKB: f.Size / 1024,
-			})
+			}, cleanup.StatusRenameDoc, "rename → "+newPath)
 			continue
 		}
 
 		// 6. Misplaced scripts (.sh at repo root level)
 		if isMisplacedScript(f) {
 			referenced := referencedScripts[name]
-			result.MisplacedScripts = append(result.MisplacedScripts, cleanup.FileCandidate{
+			addResult(&result.MisplacedScripts, cleanup.FileCandidate{
 				File:       f.RelPath,
 				SizeKB:     f.Size / 1024,
 				Tracked:    boolPtr(f.Tracked),
 				Referenced: boolPtr(referenced),
 				Score:      cleanup.Score(f),
-			})
-			result.AllFiles = append(result.AllFiles, cleanup.LabeledFile{
-				File: f.RelPath, Status: cleanup.StatusMisplacedScript, SizeKB: f.Size / 1024,
-			})
+			}, cleanup.StatusMisplacedScript, "")
 			continue
 		}
 
 		// 7. Untrack candidates (tracked files that shouldn't be in git)
 		if ok, reason := isUntrackCandidate(f); ok {
-			result.UntrackCandidates = append(result.UntrackCandidates, cleanup.FileCandidate{
+			addResult(&result.UntrackCandidates, cleanup.FileCandidate{
 				File:   f.RelPath,
 				Reason: reason,
 				SizeKB: f.Size / 1024,
 				Score:  cleanup.Score(f),
-			})
-			result.AllFiles = append(result.AllFiles, cleanup.LabeledFile{
-				File: f.RelPath, Status: cleanup.StatusUntrack, Reason: reason, SizeKB: f.Size / 1024,
-			})
+			}, cleanup.StatusUntrack, reason)
 			continue
 		}
 
@@ -1107,10 +1055,10 @@ func categorize(files []cleanup.FileInfo, cfg cleanup.Config) cleanup.ScanResult
 			}
 
 			c := cleanup.FileCandidate{
-				File:    f.RelPath,
-				Reason:  reason,
-				SizeKB:  f.Size / 1024,
-				Score:   cleanup.Score(f),
+				File:   f.RelPath,
+				Reason: reason,
+				SizeKB: f.Size / 1024,
+				Score:  cleanup.Score(f),
 			}
 			if hint != "unknown" && hint != "meaningful" {
 				c.ContentHint = hint
@@ -1118,10 +1066,7 @@ func categorize(files []cleanup.FileInfo, cfg cleanup.Config) cleanup.ScanResult
 			if f.StaleDays > 0 {
 				c.StaleDays = f.StaleDays
 			}
-			result.ArchiveCandidates = append(result.ArchiveCandidates, c)
-			result.AllFiles = append(result.AllFiles, cleanup.LabeledFile{
-				File: f.RelPath, Status: cleanup.StatusArchive, Reason: reason, SizeKB: f.Size / 1024,
-			})
+			addResult(&result.ArchiveCandidates, c, cleanup.StatusArchive, reason)
 			continue
 		}
 

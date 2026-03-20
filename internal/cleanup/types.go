@@ -55,6 +55,36 @@ func (c ContentClass) String() string {
 	}
 }
 
+// Severity levels for findings.
+const (
+	SevInfo  = 0
+	SevWarn  = 1
+	SevError = 2
+)
+
+// Rule constants for findings.
+const (
+	RuleUntracked = "untracked"
+	RuleStale     = "stale"
+	RuleOrphaned  = "orphaned"
+	RuleLargeFile = "large-file"
+	RuleEmpty     = "empty"
+	RuleGenerated = "generated"
+	RuleScratch   = "scratch"
+	RuleTodoOnly  = "todo-only"
+	RuleLogDump   = "log-dump"
+	RuleDuplicate = "duplicate"
+)
+
+// Finding is a normalized signal produced by any analyzer.
+type Finding struct {
+	Source     string  `json:"source"`     // producer: "git", "classify", "duplicates", "walker"
+	Rule      string  `json:"rule"`       // signal name from Rule constants
+	Severity  int     `json:"severity"`   // SevInfo, SevWarn, SevError
+	Confidence float64 `json:"confidence"` // 0.0-1.0
+	Message   string  `json:"message"`    // human-readable
+}
+
 // Status labels for file inventory.
 const (
 	StatusClean           = "clean"
@@ -86,6 +116,22 @@ type FileInfo struct {
 	Duplicate  string       // if set, path of the original this duplicates
 	Executable bool         // has executable permission bit
 	Orphaned   bool         // deleted from git history but still exists
+	Findings   []Finding    // normalized signals from all analyzers
+}
+
+// AddFinding appends a finding to the file's signal list.
+func (f *FileInfo) AddFinding(finding Finding) {
+	f.Findings = append(f.Findings, finding)
+}
+
+// HasFinding reports whether the file has a finding with the given rule.
+func (f *FileInfo) HasFinding(rule string) bool {
+	for _, finding := range f.Findings {
+		if finding.Rule == rule {
+			return true
+		}
+	}
+	return false
 }
 
 // FileCandidate is the enriched JSON output per file (superset of bash fields).

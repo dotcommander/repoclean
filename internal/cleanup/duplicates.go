@@ -1,6 +1,10 @@
 package cleanup
 
 import (
+	"crypto/sha256"
+	"fmt"
+	"io"
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -85,6 +89,58 @@ func FindDuplicates(files []FileInfo) {
 			}
 		}
 	}
+
+	// Signal 3: content hash for same-size files with different names
+	bySize := make(map[int64][]*FileInfo)
+	for i := range files {
+		f := &files[i]
+		if f.IsDir || f.IsSymlink || f.Duplicate != "" || f.Size <= 4096 {
+			continue
+		}
+		bySize[f.Size] = append(bySize[f.Size], f)
+	}
+	for _, group := range bySize {
+		if len(group) < 2 {
+			continue
+		}
+		byHash := make(map[string][]*FileInfo)
+		for _, f := range group {
+			h := hashPrefix(f.Path)
+			if h != "" {
+				byHash[h] = append(byHash[h], f)
+			}
+		}
+		for _, matches := range byHash {
+			if len(matches) < 2 {
+				continue
+			}
+			shortest := matches[0]
+			for _, f := range matches[1:] {
+				if len(f.RelPath) < len(shortest.RelPath) {
+					shortest = f
+				}
+			}
+			for _, f := range matches {
+				if f != shortest && f.Duplicate == "" {
+					f.Duplicate = shortest.RelPath
+				}
+			}
+		}
+	}
+}
+
+// hashPrefix returns hex SHA-256 of the first 4KB of a file.
+func hashPrefix(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, io.LimitReader(f, 4096)); err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
 // findOriginal checks if rel has a backup suffix and returns the original relPath if found.

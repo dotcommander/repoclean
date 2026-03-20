@@ -1,48 +1,33 @@
 package cleanup
 
-// Score returns a 0-100 cleanup confidence score for a file.
+// findingWeights maps rule → [info, warn, error] score contribution.
+var findingWeights = map[string][3]int{
+	RuleUntracked: {20, 20, 20},
+	RuleStale:     {15, 25, 35},
+	RuleLargeFile: {0, 10, 20},
+	RuleGenerated: {15, 15, 15},
+	RuleScratch:   {20, 20, 20},
+	RuleTodoOnly:  {20, 20, 20},
+	RuleLogDump:   {10, 10, 10},
+	RuleOrphaned:  {25, 25, 25},
+	RuleDuplicate: {20, 20, 20},
+	RuleEmpty:     {30, 30, 30},
+}
+
+// Score returns a 0-100 cleanup confidence score based on findings.
 func Score(f *FileInfo) int {
 	score := 0
-
-	if !f.Tracked {
-		score += 20
+	for _, finding := range f.Findings {
+		w, ok := findingWeights[finding.Rule]
+		if !ok {
+			continue
+		}
+		sev := finding.Severity
+		if sev > 2 {
+			sev = 2
+		}
+		score += w[sev]
 	}
-
-	switch {
-	case f.StaleDays > 365:
-		score += 35
-	case f.StaleDays > 180:
-		score += 25
-	case f.StaleDays > 90:
-		score += 15
-	}
-
-	switch {
-	case f.Size > 100*1024*1024:
-		score += 20
-	case f.Size > 10*1024*1024:
-		score += 10
-	}
-
-	switch f.Content {
-	case ContentGenerated:
-		score += 15
-	case ContentScratch, ContentTodoOnly:
-		score += 20
-	case ContentLogDump:
-		score += 10
-	}
-
-	if f.Orphaned {
-		score += 25
-	}
-	if f.Duplicate != "" {
-		score += 20
-	}
-	if f.IsEmpty {
-		score += 30
-	}
-
 	if score > 100 {
 		return 100
 	}

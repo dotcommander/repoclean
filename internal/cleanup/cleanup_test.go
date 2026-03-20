@@ -1,6 +1,8 @@
 package cleanup
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -115,29 +117,50 @@ func TestIsKVLine(t *testing.T) {
 // --- Score tests ---
 
 func TestScore(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		f    FileInfo
 		want int
 	}{
-		{name: "untracked only", f: FileInfo{Tracked: false}, want: 20},
-		{name: "stale 100 days + untracked", f: FileInfo{Tracked: false, StaleDays: 100}, want: 35},
-		{name: "stale 200 days + orphaned", f: FileInfo{Tracked: false, StaleDays: 200, Orphaned: true}, want: 70},
-		{name: "stale 400 days", f: FileInfo{Tracked: false, StaleDays: 400}, want: 55},       // 20+35
-		{name: "empty dir", f: FileInfo{IsDir: true, IsEmpty: true}, want: 50},                 // 20+30
-		{name: "tracked not stale", f: FileInfo{Tracked: true}, want: 0},
+		{name: "untracked only", f: FileInfo{Findings: []Finding{
+			{Rule: RuleUntracked, Severity: SevInfo},
+		}}, want: 20},
+		{name: "stale 100 days + untracked", f: FileInfo{Findings: []Finding{
+			{Rule: RuleUntracked, Severity: SevInfo},
+			{Rule: RuleStale, Severity: SevInfo},
+		}}, want: 35},
+		{name: "stale 200 days + orphaned", f: FileInfo{Findings: []Finding{
+			{Rule: RuleUntracked, Severity: SevInfo},
+			{Rule: RuleStale, Severity: SevWarn},
+			{Rule: RuleOrphaned, Severity: SevWarn},
+		}}, want: 70},
+		{name: "stale 400 days", f: FileInfo{Findings: []Finding{
+			{Rule: RuleUntracked, Severity: SevInfo},
+			{Rule: RuleStale, Severity: SevError},
+		}}, want: 55},
+		{name: "empty dir", f: FileInfo{Findings: []Finding{
+			{Rule: RuleUntracked, Severity: SevInfo},
+			{Rule: RuleEmpty, Severity: SevInfo},
+		}}, want: 50},
+		{name: "tracked not stale", f: FileInfo{}, want: 0},
 		{
 			name: "all signals capped at 100",
-			f: FileInfo{
-				Tracked: false, StaleDays: 400, Size: 200 * 1024 * 1024,
-				Content: ContentTodoOnly, Orphaned: true, Duplicate: "other.txt",
-			},
+			f: FileInfo{Findings: []Finding{
+				{Rule: RuleUntracked, Severity: SevInfo},
+				{Rule: RuleStale, Severity: SevError},
+				{Rule: RuleLargeFile, Severity: SevError},
+				{Rule: RuleTodoOnly, Severity: SevInfo},
+				{Rule: RuleOrphaned, Severity: SevWarn},
+				{Rule: RuleDuplicate, Severity: SevWarn},
+			}},
 			want: 100,
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			got := Score(&tc.f)
 			if got != tc.want {
 				t.Errorf("Score() = %d, want %d", got, tc.want)
@@ -207,5 +230,145 @@ func TestFindDuplicates(t *testing.T) {
 				t.Errorf("%s: Duplicate = %q, want %q", tc.path, f.Duplicate, tc.wantDup)
 			}
 		}
+	}
+}
+
+func TestFindDuplicatesWithHash(t *testing.T) {
+	t.Parallel()
+	// Create temp files with identical content but different names.
+	dir := t.TempDir()
+	content := strings.Repeat("duplicate content here\n", 300) // >4KB
+
+	for _, name := range []string{"report.txt", "subdir/quarterly.txt", "archive/old-report.txt"} {
+		p := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Add a unique file with same size but different content.
+	unique := strings.Repeat("totally different text!\n", 300)
+	if err := os.WriteFile(filepath.Join(dir, "unique.txt"), []byte(unique), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	files := []FileInfo{
+		{Path: filepath.Join(dir, "report.txt"), RelPath: "report.txt", Size: int64(len(content))},
+		{Path: filepath.Join(dir, "subdir/quarterly.txt"), RelPath: "subdir/quarterly.txt", Size: int64(len(content))},
+		{Path: filepath.Join(dir, "archive/old-report.txt"), RelPath: "archive/old-report.txt", Size: int64(len(content))},
+		{Path: filepath.Join(dir, "unique.txt"), RelPath: "unique.txt", Size: int64(len(unique))},
+	}
+
+	FindDuplicates(files)
+
+	byPath := make(map[string]FileInfo)
+	for _, f := range files {
+		byPath[f.RelPath] = f
+	}
+
+	// report.txt has shortest path → original.
+	if byPath["report.txt"].Duplicate != "" {
+		t.Errorf("report.txt should be original, got duplicate=%q", byPath["report.txt"].Duplicate)
+	}
+	// Others should point to report.txt.
+	if byPath["subdir/quarterly.txt"].Duplicate != "report.txt" {
+		t.Errorf("quarterly.txt duplicate=%q, want report.txt", byPath["subdir/quarterly.txt"].Duplicate)
+	}
+	if byPath["archive/old-report.txt"].Duplicate != "report.txt" {
+		t.Errorf("old-report.txt duplicate=%q, want report.txt", byPath["archive/old-report.txt"].Duplicate)
+	}
+	// Unique file should not be flagged.
+	if byPath["unique.txt"].Duplicate != "" {
+		t.Errorf("unique.txt should have no duplicate, got %q", byPath["unique.txt"].Duplicate)
+	}
+}
+
+func TestMimeToClass(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		mime string
+		want ContentClass
+	}{
+		{"application/json", ContentConfig},
+		{"application/xml", ContentConfig},
+		{"text/xml", ContentConfig},
+		{"application/toml", ContentConfig},
+		{"application/x-yaml", ContentConfig},
+		{"text/x-yaml", ContentConfig},
+		{"text/plain", ContentUnknown},
+		{"image/png", ContentUnknown},
+		{"application/octet-stream", ContentUnknown},
+		{"application/pdf", ContentUnknown},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.mime, func(t *testing.T) {
+			t.Parallel()
+			got := mimeToClass(tc.mime)
+			if got != tc.want {
+				t.Errorf("mimeToClass(%q) = %v, want %v", tc.mime, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestEmitFindings(t *testing.T) {
+	t.Parallel()
+	files := []FileInfo{
+		{Tracked: false, StaleDays: 200, Orphaned: true, Size: 500, Content: ContentGenerated, Duplicate: "other.go"},
+		{Tracked: true, Size: 50 * 1024 * 1024},
+		{Tracked: true},
+	}
+
+	EmitFindings(files)
+
+	// File 0: untracked + stale(warn) + orphaned + generated + duplicate = 5 findings
+	if len(files[0].Findings) != 5 {
+		t.Errorf("file 0: got %d findings, want 5", len(files[0].Findings))
+	}
+	if !files[0].HasFinding(RuleUntracked) {
+		t.Error("file 0: missing untracked finding")
+	}
+	if !files[0].HasFinding(RuleStale) {
+		t.Error("file 0: missing stale finding")
+	}
+	if !files[0].HasFinding(RuleOrphaned) {
+		t.Error("file 0: missing orphaned finding")
+	}
+	if !files[0].HasFinding(RuleGenerated) {
+		t.Error("file 0: missing generated finding")
+	}
+	if !files[0].HasFinding(RuleDuplicate) {
+		t.Error("file 0: missing duplicate finding")
+	}
+
+	// File 1: tracked, 50MB → large-file(warn) only
+	if len(files[1].Findings) != 1 {
+		t.Errorf("file 1: got %d findings, want 1", len(files[1].Findings))
+	}
+	if !files[1].HasFinding(RuleLargeFile) {
+		t.Error("file 1: missing large-file finding")
+	}
+
+	// File 2: tracked, no signals → 0 findings
+	if len(files[2].Findings) != 0 {
+		t.Errorf("file 2: got %d findings, want 0", len(files[2].Findings))
+	}
+}
+
+func TestFindingHelpers(t *testing.T) {
+	t.Parallel()
+	f := &FileInfo{}
+	if f.HasFinding(RuleStale) {
+		t.Error("empty file should not have stale finding")
+	}
+	f.AddFinding(Finding{Source: "test", Rule: RuleStale, Severity: SevWarn})
+	if !f.HasFinding(RuleStale) {
+		t.Error("should have stale finding after AddFinding")
+	}
+	if f.HasFinding(RuleOrphaned) {
+		t.Error("should not have orphaned finding")
 	}
 }

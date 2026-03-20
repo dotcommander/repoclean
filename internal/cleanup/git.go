@@ -93,18 +93,17 @@ func lastModifiedDays(cfg Config, relPaths []string) map[string]int {
 	return result
 }
 
-// recentlyModified returns the set of file paths modified within staleDays.
-func recentlyModified(cfg Config) (map[string]bool, error) {
+// gitLogToSet runs a git-log command and collects non-empty output lines into a set.
+func gitLogToSet(cfg Config, label string, args ...string) (map[string]bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	since := fmt.Sprintf("--since=%dd", cfg.StaleDays)
-	cmd := exec.CommandContext(ctx, "git", "log", "--all", "--name-only", "--pretty=format:", since)
+	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 	cmd.Dir = cfg.Path
 
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("git log recent: %w", err)
+		return nil, fmt.Errorf("git log %s: %w", label, err)
 	}
 
 	set := make(map[string]bool)
@@ -118,26 +117,13 @@ func recentlyModified(cfg Config) (map[string]bool, error) {
 	return set, scanner.Err()
 }
 
+// recentlyModified returns the set of file paths modified within staleDays.
+func recentlyModified(cfg Config) (map[string]bool, error) {
+	since := fmt.Sprintf("--since=%dd", cfg.StaleDays)
+	return gitLogToSet(cfg, "recent", "git", "log", "--all", "--name-only", "--pretty=format:", since)
+}
+
 // recentlyDeleted returns the set of file paths deleted in the last 200 commits.
 func recentlyDeleted(cfg Config) (map[string]bool, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, "git", "log", "--diff-filter=D", "--name-only", "--pretty=format:", "-n", "200")
-	cmd.Dir = cfg.Path
-
-	out, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("git log deleted: %w", err)
-	}
-
-	set := make(map[string]bool)
-	scanner := bufio.NewScanner(bytes.NewReader(out))
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line != "" {
-			set[line] = true
-		}
-	}
-	return set, scanner.Err()
+	return gitLogToSet(cfg, "deleted", "git", "log", "--diff-filter=D", "--name-only", "--pretty=format:", "-n", "200")
 }
