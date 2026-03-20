@@ -76,17 +76,7 @@ func FindDuplicates(files []FileInfo) {
 			if matches[0].Size <= 4096 {
 				continue
 			}
-			shortest := matches[0]
-			for _, f := range matches[1:] {
-				if len(f.RelPath) < len(shortest.RelPath) {
-					shortest = f
-				}
-			}
-			for _, f := range matches {
-				if f != shortest && f.Duplicate == "" {
-					f.Duplicate = shortest.RelPath
-				}
-			}
+			markShortestAsDuplicate(matches)
 		}
 	}
 
@@ -114,17 +104,23 @@ func FindDuplicates(files []FileInfo) {
 			if len(matches) < 2 {
 				continue
 			}
-			shortest := matches[0]
-			for _, f := range matches[1:] {
-				if len(f.RelPath) < len(shortest.RelPath) {
-					shortest = f
-				}
-			}
-			for _, f := range matches {
-				if f != shortest && f.Duplicate == "" {
-					f.Duplicate = shortest.RelPath
-				}
-			}
+			markShortestAsDuplicate(matches)
+		}
+	}
+}
+
+// markShortestAsDuplicate picks the file with the shortest RelPath as the canonical
+// copy and marks all others in the group as duplicates of it.
+func markShortestAsDuplicate(matches []*FileInfo) {
+	shortest := matches[0]
+	for _, f := range matches[1:] {
+		if len(f.RelPath) < len(shortest.RelPath) {
+			shortest = f
+		}
+	}
+	for _, f := range matches {
+		if f != shortest && f.Duplicate == "" {
+			f.Duplicate = shortest.RelPath
 		}
 	}
 }
