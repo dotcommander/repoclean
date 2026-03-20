@@ -591,5 +591,7 @@ func Categorize(files []FileInfo, cfg Config) ScanResult {
 		len(result.LargeFiles) + len(result.MisplacedScripts) + len(result.MisplacedDocs) +
 		len(result.UntrackCandidates) + len(result.RenameDocs)
 
+	result.HealthScore = CalculateHealth(result)
+
 	return result
 }

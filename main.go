@@ -97,8 +97,15 @@ func main() {
 }
 
 func fmtSize(kb int64) string {
-	if kb >= 1024 {
-		return fmt.Sprintf("%4dMB", kb/1024)
+	b := float64(kb) * 1024
+	const unit = 1024
+	if b < unit {
+		return fmt.Sprintf("%dB", int64(b))
 	}
-	return fmt.Sprintf("%4dKB", kb)
+	div, exp := int64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f%cB", b/float64(div), "KMGTPE"[exp])
 }

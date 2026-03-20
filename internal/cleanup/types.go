@@ -159,6 +159,7 @@ type LabeledFile struct {
 // ScanResult is the top-level JSON output — backward compatible.
 type ScanResult struct {
 	Path                  string          `json:"path"`
+	HealthScore           int             `json:"health_score"`
 	DeleteCandidates      []FileCandidate `json:"delete_candidates"`
 	DevArtifactCandidates []FileCandidate `json:"dev_artifact_candidates"`
 	ArchiveCandidates     []FileCandidate `json:"archive_candidates"`
