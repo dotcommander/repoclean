@@ -96,7 +96,7 @@ func isDeleteCandidate(f *FileInfo) (bool, string) {
 		return true, "cache directory"
 	}
 
-	if f.IsEmpty {
+	if f.HasFinding(RuleEmpty) {
 		return true, "empty directory"
 	}
 
@@ -176,7 +176,7 @@ func isUntrackCandidate(f *FileInfo) (bool, string) {
 		!strings.HasPrefix(f.RelPath, "hooks/") {
 		return true, "compiled binary"
 	}
-	if f.Content == ContentGenerated {
+	if f.HasFinding(RuleGenerated) {
 		return true, "generated content"
 	}
 	return false, ""
@@ -546,7 +546,7 @@ func Categorize(files []FileInfo, cfg Config) ScanResult {
 		if !f.Tracked && !f.IsDir {
 			hint := f.Content.String()
 			reason := "untracked file"
-			if f.Duplicate != "" {
+			if f.HasFinding(RuleDuplicate) {
 				reason += ", potential duplicate of " + f.Duplicate
 			}
 
