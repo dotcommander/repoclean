@@ -307,7 +307,10 @@ func Categorize(files []FileInfo, cfg Config) ScanResult {
 	referencedScripts := findReferencedScripts(cfg.Path, scriptNames)
 	goBinLinked := findGoBinLinked()
 
-	addResult := func(slice *[]FileCandidate, c FileCandidate, status, reason string) {
+	addResult := func(slice *[]FileCandidate, c FileCandidate, findings []Finding, status, reason string) {
+		if len(findings) > 0 {
+			c.Findings = findings
+		}
 		*slice = append(*slice, c)
 		result.AllFiles = append(result.AllFiles, LabeledFile{
 			File: c.File, Status: status, Reason: reason, SizeKB: c.SizeKB,
@@ -352,7 +355,7 @@ func Categorize(files []FileInfo, cfg Config) ScanResult {
 				if strings.HasPrefix(f.RelPath, "bin/") && ext == "" {
 					addResult(&result.DeleteCandidates, FileCandidate{
 						File: f.RelPath, Reason: "ignored stale binary", SizeKB: f.Size / 1024,
-					}, StatusDelete, "ignored stale binary")
+					}, f.Findings, StatusDelete, "ignored stale binary")
 				}
 				continue
 			}
@@ -360,7 +363,7 @@ func Categorize(files []FileInfo, cfg Config) ScanResult {
 			if strings.Contains(name, ".backup.") {
 				addResult(&result.DeleteCandidates, FileCandidate{
 					File: f.RelPath, Reason: "ignored backup file", SizeKB: f.Size / 1024,
-				}, StatusDelete, "ignored backup file")
+				}, f.Findings, StatusDelete, "ignored backup file")
 				continue
 			}
 			// Dev doc patterns at any depth
@@ -374,7 +377,7 @@ func Categorize(files []FileInfo, cfg Config) ScanResult {
 			if isDevDoc {
 				addResult(&result.DeleteCandidates, FileCandidate{
 					File: f.RelPath, Reason: "ignored dev document", SizeKB: f.Size / 1024,
-				}, StatusDelete, "ignored dev document")
+				}, f.Findings, StatusDelete, "ignored dev document")
 				continue
 			}
 			// Verify scripts, archive files at root
@@ -385,7 +388,7 @@ func Categorize(files []FileInfo, cfg Config) ScanResult {
 					if strings.HasPrefix(name, pfx) {
 						addResult(&result.DeleteCandidates, FileCandidate{
 							File: f.RelPath, Reason: "ignored dev script", SizeKB: f.Size / 1024,
-						}, StatusDelete, "ignored dev script")
+						}, f.Findings, StatusDelete, "ignored dev script")
 						isDeletePrefix = true
 						break
 					}
@@ -397,7 +400,7 @@ func Categorize(files []FileInfo, cfg Config) ScanResult {
 				if deleteExts[ext] {
 					addResult(&result.DeleteCandidates, FileCandidate{
 						File: f.RelPath, Reason: "ignored temp file", SizeKB: f.Size / 1024,
-					}, StatusDelete, "ignored temp file")
+					}, f.Findings, StatusDelete, "ignored temp file")
 					continue
 				}
 				// Archive files at root → move to .work/
@@ -407,7 +410,7 @@ func Categorize(files []FileInfo, cfg Config) ScanResult {
 						Reason: "archive file at repo root",
 						SizeKB: f.Size / 1024,
 						Score:  Score(f),
-					}, StatusArchive, "archive file at repo root")
+					}, f.Findings, StatusArchive, "archive file at repo root")
 					continue
 				}
 			}
@@ -435,7 +438,7 @@ func Categorize(files []FileInfo, cfg Config) ScanResult {
 				SizeKB:      f.Size / 1024,
 				Score:       Score(f),
 				ContentHint: "data",
-			}, StatusArchive, reason)
+			}, f.Findings, StatusArchive, reason)
 			continue
 		}
 
@@ -446,7 +449,7 @@ func Categorize(files []FileInfo, cfg Config) ScanResult {
 				Reason: "scaffold remnant",
 				SizeKB: f.Size / 1024,
 				Score:  Score(f),
-			}, StatusDelete, "scaffold remnant")
+			}, f.Findings, StatusDelete, "scaffold remnant")
 			continue
 		}
 
@@ -457,7 +460,7 @@ func Categorize(files []FileInfo, cfg Config) ScanResult {
 				Reason: reason,
 				SizeKB: f.Size / 1024,
 				Score:  Score(f),
-			}, StatusDelete, reason)
+			}, f.Findings, StatusDelete, reason)
 			continue
 		}
 
@@ -468,7 +471,7 @@ func Categorize(files []FileInfo, cfg Config) ScanResult {
 				SizeKB: f.Size / 1024,
 				Target: f.LinkTarget,
 				Score:  Score(f),
-			}, StatusBrokenLink, "broken symlink → "+f.LinkTarget)
+			}, f.Findings, StatusBrokenLink, "broken symlink → "+f.LinkTarget)
 			continue
 		}
 
@@ -479,7 +482,7 @@ func Categorize(files []FileInfo, cfg Config) ScanResult {
 				SizeKB:  f.Size / 1024,
 				Tracked: boolPtr(f.Tracked),
 				Score:   Score(f),
-			}, StatusLargeFile, "file > 10MB")
+			}, f.Findings, StatusLargeFile, "file > 10MB")
 			continue
 		}
 
@@ -490,7 +493,7 @@ func Categorize(files []FileInfo, cfg Config) ScanResult {
 				Reason: "tracked dev artifact",
 				SizeKB: f.Size / 1024,
 				Score:  Score(f),
-			}, StatusDevArtifact, "tracked dev artifact")
+			}, f.Findings, StatusDevArtifact, "tracked dev artifact")
 			continue
 		}
 
@@ -501,7 +504,7 @@ func Categorize(files []FileInfo, cfg Config) ScanResult {
 				Reason: "root .md → docs/",
 				SizeKB: f.Size / 1024,
 				Score:  Score(f),
-			}, StatusMisplacedDoc, "root .md → docs/")
+			}, f.Findings, StatusMisplacedDoc, "root .md → docs/")
 			continue
 		}
 
@@ -511,7 +514,7 @@ func Categorize(files []FileInfo, cfg Config) ScanResult {
 				File:   f.RelPath,
 				Target: newPath,
 				SizeKB: f.Size / 1024,
-			}, StatusRenameDoc, "rename → "+newPath)
+			}, f.Findings, StatusRenameDoc, "rename → "+newPath)
 			continue
 		}
 
@@ -524,7 +527,7 @@ func Categorize(files []FileInfo, cfg Config) ScanResult {
 				Tracked:    boolPtr(f.Tracked),
 				Referenced: boolPtr(referenced),
 				Score:      Score(f),
-			}, StatusMisplacedScript, "")
+			}, f.Findings, StatusMisplacedScript, "")
 			continue
 		}
 
@@ -535,7 +538,7 @@ func Categorize(files []FileInfo, cfg Config) ScanResult {
 				Reason: reason,
 				SizeKB: f.Size / 1024,
 				Score:  Score(f),
-			}, StatusUntrack, reason)
+			}, f.Findings, StatusUntrack, reason)
 			continue
 		}
 
@@ -559,7 +562,7 @@ func Categorize(files []FileInfo, cfg Config) ScanResult {
 			if f.StaleDays > 0 {
 				c.StaleDays = f.StaleDays
 			}
-			addResult(&result.ArchiveCandidates, c, StatusArchive, reason)
+			addResult(&result.ArchiveCandidates, c, f.Findings, StatusArchive, reason)
 			continue
 		}
 

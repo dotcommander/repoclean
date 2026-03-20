@@ -136,15 +136,16 @@ func (f *FileInfo) HasFinding(rule string) bool {
 
 // FileCandidate is the enriched JSON output per file (superset of bash fields).
 type FileCandidate struct {
-	File        string `json:"file"`
-	Reason      string `json:"reason,omitempty"`
-	SizeKB      int64  `json:"size_kb"`
-	Tracked     *bool  `json:"tracked,omitempty"`
-	Referenced  *bool  `json:"referenced,omitempty"`
-	Target      string `json:"target,omitempty"`
-	StaleDays   int    `json:"stale_days,omitempty"`
-	Score       int    `json:"score,omitempty"`
-	ContentHint string `json:"content_hint,omitempty"`
+	File        string    `json:"file"`
+	Reason      string    `json:"reason,omitempty"`
+	SizeKB      int64     `json:"size_kb"`
+	Tracked     *bool     `json:"tracked,omitempty"`
+	Referenced  *bool     `json:"referenced,omitempty"`
+	Target      string    `json:"target,omitempty"`
+	StaleDays   int       `json:"stale_days,omitempty"`
+	Score       int       `json:"score,omitempty"`
+	ContentHint string    `json:"content_hint,omitempty"`
+	Findings    []Finding `json:"findings,omitempty"`
 }
 
 // LabeledFile tags every walked file with a disposition status.
