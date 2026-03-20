@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/dotcommander/repoclean/internal/cleanup"
@@ -140,4 +141,70 @@ func printReport(result cleanup.ScanResult) {
 	} else {
 		fmt.Fprintf(w, "Summary: %s\n", strings.Join(parts, ", "))
 	}
+}
+
+var sevLabel = [3]string{"info", "warn", "ERROR"}
+
+func printFindings(files []cleanup.FileInfo) {
+	w := os.Stdout
+
+	// Group files by rule.
+	type entry struct {
+		relPath  string
+		finding  cleanup.Finding
+		sizeKB   int64
+		score    int
+	}
+	byRule := map[string][]entry{}
+	totalFiles := 0
+	for i := range files {
+		f := &files[i]
+		if len(f.Findings) == 0 {
+			continue
+		}
+		totalFiles++
+		for _, fin := range f.Findings {
+			byRule[fin.Rule] = append(byRule[fin.Rule], entry{
+				relPath: f.RelPath, finding: fin,
+				sizeKB: f.Size / 1024, score: cleanup.Score(f),
+			})
+		}
+	}
+
+	if totalFiles == 0 {
+		fmt.Fprintln(w, "No findings.")
+		return
+	}
+
+	// Sort rules by count descending.
+	rules := make([]string, 0, len(byRule))
+	for r := range byRule {
+		rules = append(rules, r)
+	}
+	sort.Slice(rules, func(i, j int) bool {
+		return len(byRule[rules[i]]) > len(byRule[rules[j]])
+	})
+
+	fmt.Fprintf(w, "Findings — %d files with signals\n%s\n\n", totalFiles, strings.Repeat("─", 40))
+
+	for _, rule := range rules {
+		entries := byRule[rule]
+		fmt.Fprintf(w, "%s (%d)\n", strings.ToUpper(rule), len(entries))
+		for _, e := range entries {
+			sev := "info"
+			if e.finding.Severity >= 0 && e.finding.Severity <= 2 {
+				sev = sevLabel[e.finding.Severity]
+			}
+			fmt.Fprintf(w, "  %-5s %-40s %6s  score:%d  %s\n",
+				sev, e.relPath, fmtSize(e.sizeKB), e.score, e.finding.Message)
+		}
+		fmt.Fprintln(w)
+	}
+
+	// Summary line.
+	var parts []string
+	for _, r := range rules {
+		parts = append(parts, fmt.Sprintf("%s:%d", r, len(byRule[r])))
+	}
+	fmt.Fprintf(w, "Total: %s\n", strings.Join(parts, "  "))
 }

@@ -16,6 +16,7 @@ func main() {
 	maxDepth := flag.Int("max-depth", 5, "maximum directory depth")
 	staleDays := flag.Int("stale-days", 90, "days before a file is considered stale")
 	report := flag.Bool("report", false, "output human-readable cleanup plan instead of JSON")
+	findings := flag.Bool("findings", false, "output findings-focused view grouped by signal")
 	execMode := flag.Bool("exec", false, "output shell commands for automated execution")
 	apply := flag.Bool("apply", false, "dry-run: show commands that would execute (add --confirm to run)")
 	confirm := flag.Bool("confirm", false, "actually execute commands (requires --apply)")
@@ -75,6 +76,11 @@ func main() {
 
 	if *execMode {
 		printExec(result)
+		return
+	}
+
+	if *findings {
+		printFindings(files)
 		return
 	}
 
