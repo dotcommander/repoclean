@@ -151,6 +151,12 @@ func printReport(result cleanup.ScanResult) {
 
 var sevLabel = [3]string{"info", "warn", "ERROR"}
 
+var sevIcon = map[string]string{
+	"error":   "\u2717",
+	"warning": "\u25b3",
+	"info":    "\u25cb",
+}
+
 func printFindings(files []cleanup.FileInfo) {
 	w := os.Stdout
 
@@ -215,4 +221,40 @@ func printFindings(files []cleanup.FileInfo) {
 		parts = append(parts, fmt.Sprintf("%s:%d", r, len(byRule[r])))
 	}
 	fmt.Fprintf(w, "Total: %s\n", strings.Join(parts, "  "))
+}
+
+func printMissing(cr cleanup.CompletenessReport) {
+	w := os.Stdout
+	fmt.Fprintf(w, "Repo Completeness \u2014 %s\n%s\n", cr.Path, strings.Repeat("\u2500", 40))
+	fmt.Fprintf(w, "Score: %d/100\n\n", cr.Score)
+
+	if len(cr.Missing) == 0 {
+		fmt.Fprintln(w, "All expected files present. Repository is complete.")
+		return
+	}
+
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "  Sev\tMissing\tWhy")
+	for _, m := range cr.Missing {
+		icon := sevIcon[m.Severity]
+		if icon == "" {
+			icon = "?"
+		}
+		fmt.Fprintf(tw, "  %s\t%s\t%s\n", icon, m.Name, m.Why)
+	}
+	tw.Flush()
+	fmt.Fprintln(w)
+
+	var errs, warns, infos int
+	for _, m := range cr.Missing {
+		switch m.Severity {
+		case "error":
+			errs++
+		case "warning":
+			warns++
+		case "info":
+			infos++
+		}
+	}
+	fmt.Fprintf(w, "Missing: %d critical, %d warnings, %d suggestions\n", errs, warns, infos)
 }

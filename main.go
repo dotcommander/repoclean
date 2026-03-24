@@ -20,6 +20,7 @@ func main() {
 	execMode := flag.Bool("exec", false, "output shell commands for automated execution")
 	apply := flag.Bool("apply", false, "dry-run: show commands that would execute (add --confirm to run)")
 	confirm := flag.Bool("confirm", false, "actually execute commands (requires --apply)")
+	missing := flag.Bool("missing", false, "check repo completeness (missing LICENSE, CI, etc.)")
 	flag.Parse()
 
 	absPath, err := filepath.Abs(*path)
@@ -32,6 +33,7 @@ func main() {
 		MaxDepth:  *maxDepth,
 		StaleDays: *staleDays,
 	}
+	cfg.Rules = cleanup.LoadRules()
 
 	start := time.Now()
 	files, err := cleanup.Walk(cfg)
@@ -40,6 +42,13 @@ func main() {
 	}
 	if time.Since(start) > 5*time.Second {
 		log.Printf("cleanup-scanner: walk took %v (large repo?)", time.Since(start))
+	}
+
+	if *missing {
+		cr := cleanup.CheckCompleteness(files)
+		cr.Path = absPath
+		printMissing(cr)
+		return
 	}
 
 	if err := cleanup.Enrich(files, cfg); err != nil {
