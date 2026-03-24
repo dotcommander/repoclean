@@ -34,15 +34,6 @@ var (
 		".png": true, ".jpg": true, ".jpeg": true, ".gif": true,
 		".svg": true, ".ico": true, ".webp": true, ".bmp": true,
 	}
-	// Patterns for ignored files that are dev junk and should be deleted.
-	// Checked via strings.Contains or suffix matching.
-	ignoredDevDocSuffixes = []string{
-		"_GUIDE.md", "_REPORT.md", "_IMPLEMENTATION.md", "_ANALYSIS.md",
-		"_PLAN.md", "_SUMMARY.md", "_PROGRESS.md", "_RESULTS.md",
-	}
-	ignoredDeletePrefixes = []string{"verify-"}
-	// Directories where ignored files are expected runtime data — never touch.
-	ignoredSafeDirs = []string{"data/", "bin/", "cache/", ".work/"}
 	// Data files: NEVER delete. Route to archive with prominent warning.
 	dataExts = map[string]bool{
 		".db": true, ".sqlite": true, ".sqlite3": true,
@@ -52,19 +43,6 @@ var (
 		"node_modules": true, "__pycache__": true,
 		".pytest_cache": true, ".mypy_cache": true,
 	}
-	devArtifactPrefixes = []string{"looper", "flow"}
-	devArtifactSuffixes = []string{"_SUMMARY.md", "-spec.md", "_spec.md", "-state.json"}
-	// Allowlisted .md files at repo root — everything else is a dev artifact.
-	allowedRootMD = map[string]bool{
-		"README.md": true, "CLAUDE.md": true, "CHANGELOG.md": true,
-		"LICENSE.md": true, "CONTRIBUTING.md": true, "SECURITY.md": true,
-		"CODE_OF_CONDUCT.md": true, "RTK.md": true, "AGENTS.md": true,
-	}
-	// Scaffold files: tracked files that are leftover from project init (e.g., Vite, CRA).
-	scaffoldFiles = map[string]bool{
-		"public/vite.svg": true, "public/favicon.ico": true,
-		"src/logo.svg": true, "src/App.css": true,
-	}
 	// Extensions that typically shouldn't be tracked in git.
 	untrackExts = map[string]bool{
 		".exe": true, ".dll": true, ".so": true, ".dylib": true,
@@ -72,8 +50,6 @@ var (
 		".zip": true, ".tar": true, ".gz": true, ".tgz": true,
 		".rar": true, ".7z": true, ".wasm": true,
 	}
-	// Directory prefixes where tracked files are likely build output.
-	untrackDirs = []string{"dist/", "build/", "out/", "target/"}
 )
 
 func isDeleteCandidate(f *FileInfo) (bool, string) {
@@ -103,7 +79,7 @@ func isDeleteCandidate(f *FileInfo) (bool, string) {
 	return false, ""
 }
 
-func isDevArtifact(f *FileInfo) bool {
+func isDevArtifact(f *FileInfo, rules Rules) bool {
 	if !f.Tracked || f.IsDir {
 		return false
 	}
@@ -114,12 +90,12 @@ func isDevArtifact(f *FileInfo) bool {
 	}
 	name := filepath.Base(f.RelPath)
 
-	for _, p := range devArtifactPrefixes {
+	for _, p := range rules.DevArtifactPrefixes {
 		if strings.HasPrefix(name, p) {
 			return true
 		}
 	}
-	for _, s := range devArtifactSuffixes {
+	for _, s := range rules.DevArtifactSuffixes {
 		if strings.HasSuffix(name, s) {
 			return true
 		}
@@ -127,7 +103,7 @@ func isDevArtifact(f *FileInfo) bool {
 	return false
 }
 
-func isMisplacedDoc(f *FileInfo) bool {
+func isMisplacedDoc(f *FileInfo, allowedMD map[string]bool) bool {
 	if f.IsDir || !f.Tracked {
 		return false
 	}
@@ -138,13 +114,13 @@ func isMisplacedDoc(f *FileInfo) bool {
 	if strings.Contains(f.RelPath, "/") {
 		return false
 	}
-	if allowedRootMD[name] {
+	if allowedMD[name] {
 		return false
 	}
 	return true
 }
 
-func isUntrackCandidate(f *FileInfo) (bool, string) {
+func isUntrackCandidate(f *FileInfo, untrackDirList []string) (bool, string) {
 	if !f.Tracked || f.IsDir || f.IsSymlink {
 		return false, ""
 	}
@@ -164,7 +140,7 @@ func isUntrackCandidate(f *FileInfo) (bool, string) {
 		!strings.HasSuffix(name, ".template")) {
 		return true, "environment file"
 	}
-	for _, dir := range untrackDirs {
+	for _, dir := range untrackDirList {
 		if strings.HasPrefix(f.RelPath, dir) {
 			return true, "build output directory"
 		}
@@ -283,6 +259,13 @@ func findGoBinLinked() map[string]bool {
 func boolPtr(b bool) *bool { return &b }
 
 func Categorize(files []FileInfo, cfg Config) ScanResult {
+	if cfg.Rules.IsZero() {
+		cfg.Rules = DefaultRules()
+	}
+
+	allowedMD := toSet(cfg.Rules.AllowedRootMD)
+	scaffolds := toSet(cfg.Rules.ScaffoldFiles)
+
 	result := ScanResult{
 		DeleteCandidates:      []FileCandidate{},
 		DevArtifactCandidates: []FileCandidate{},
@@ -320,6 +303,14 @@ func Categorize(files []FileInfo, cfg Config) ScanResult {
 	for i := range files {
 		f := &files[i]
 
+		// Skip files suppressed by .repocleanignore.
+		if f.Suppressed {
+			result.AllFiles = append(result.AllFiles, LabeledFile{
+				File: f.RelPath, Status: StatusClean, Reason: "suppressed", SizeKB: f.Size / 1024,
+			})
+			continue
+		}
+
 		name := filepath.Base(f.RelPath)
 		ext := filepath.Ext(name)
 
@@ -344,7 +335,7 @@ func Categorize(files []FileInfo, cfg Config) ScanResult {
 			}
 			// Files in safe dirs (data/, bin/ primary, cache/) — always skip.
 			inSafeDir := false
-			for _, sd := range ignoredSafeDirs {
+			for _, sd := range cfg.Rules.IgnoredSafeDirs {
 				if strings.HasPrefix(f.RelPath, sd) {
 					inSafeDir = true
 					break
@@ -368,7 +359,7 @@ func Categorize(files []FileInfo, cfg Config) ScanResult {
 			}
 			// Dev doc patterns at any depth
 			isDevDoc := false
-			for _, suf := range ignoredDevDocSuffixes {
+			for _, suf := range cfg.Rules.IgnoredDevDocSuffixes {
 				if strings.HasSuffix(name, suf) {
 					isDevDoc = true
 					break
@@ -384,7 +375,7 @@ func Categorize(files []FileInfo, cfg Config) ScanResult {
 			isRootLevel := !strings.Contains(f.RelPath, "/")
 			if isRootLevel {
 				isDeletePrefix := false
-				for _, pfx := range ignoredDeletePrefixes {
+				for _, pfx := range cfg.Rules.IgnoredDeletePrefixes {
 					if strings.HasPrefix(name, pfx) {
 						addResult(&result.DeleteCandidates, FileCandidate{
 							File: f.RelPath, Reason: "ignored dev script", SizeKB: f.Size / 1024,
@@ -443,7 +434,7 @@ func Categorize(files []FileInfo, cfg Config) ScanResult {
 		}
 
 		// 1b. Scaffold remnants (tracked files from project init with zero references)
-		if f.Tracked && scaffoldFiles[f.RelPath] {
+		if f.Tracked && scaffolds[f.RelPath] {
 			addResult(&result.DeleteCandidates, FileCandidate{
 				File:   f.RelPath,
 				Reason: "scaffold remnant",
@@ -487,7 +478,7 @@ func Categorize(files []FileInfo, cfg Config) ScanResult {
 		}
 
 		// 5. Dev artifacts (tracked files matching patterns)
-		if isDevArtifact(f) {
+		if isDevArtifact(f, cfg.Rules) {
 			addResult(&result.DevArtifactCandidates, FileCandidate{
 				File:   f.RelPath,
 				Reason: "tracked dev artifact",
@@ -498,7 +489,7 @@ func Categorize(files []FileInfo, cfg Config) ScanResult {
 		}
 
 		// 6. Misplaced docs (tracked .md at repo root, not allowlisted)
-		if isMisplacedDoc(f) {
+		if isMisplacedDoc(f, allowedMD) {
 			addResult(&result.MisplacedDocs, FileCandidate{
 				File:   f.RelPath,
 				Reason: "root .md → docs/",
@@ -532,7 +523,7 @@ func Categorize(files []FileInfo, cfg Config) ScanResult {
 		}
 
 		// 8. Untrack candidates (tracked files that shouldn't be in git)
-		if ok, reason := isUntrackCandidate(f); ok {
+		if ok, reason := isUntrackCandidate(f, cfg.Rules.UntrackDirs); ok {
 			addResult(&result.UntrackCandidates, FileCandidate{
 				File:   f.RelPath,
 				Reason: reason,
