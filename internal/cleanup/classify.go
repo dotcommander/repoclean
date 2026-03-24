@@ -2,6 +2,7 @@ package cleanup
 
 import (
 	"context"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,7 +21,7 @@ var classifyExts = map[string]bool{
 	".toml": true, ".cfg": true, ".ini": true,
 }
 
-// Classify reads first 512 bytes of ambiguous files and sets Content.
+// Classify reads first and last 256 bytes of ambiguous files and sets Content.
 func Classify(files []FileInfo) error {
 	type work struct{ idx int }
 
@@ -51,7 +52,7 @@ func Classify(files []FileInfo) error {
 		go func() {
 			defer wg.Done()
 			for w := range queue {
-				files[w.idx].Content = classifyFile(files[w.idx].Path)
+				files[w.idx].Content = classifyFile(files[w.idx].Path, files[w.idx].Size)
 			}
 		}()
 	}
@@ -60,19 +61,51 @@ func Classify(files []FileInfo) error {
 	return nil
 }
 
-func classifyFile(path string) ContentClass {
+func classifyFile(path string, knownSize int64) ContentClass {
 	f, err := os.Open(path)
 	if err != nil {
 		return ContentUnknown
 	}
 	defer f.Close()
-	buf := make([]byte, 512)
-	n, _ := f.Read(buf)
-	if n == 0 {
+
+	size := knownSize
+
+	// Read head (first 256 bytes).
+	headBuf := make([]byte, 256)
+	hn, _ := f.Read(headBuf)
+	if hn == 0 {
 		return ContentUnknown
 	}
-	data := string(buf[:n])
-	return classifyContent(data)
+	head := headBuf[:hn]
+
+	// Read tail (last 256 bytes) if file is large enough that tail differs from head.
+	var data []byte
+	if size > 512 {
+		tailBuf := make([]byte, 256)
+		f.Seek(-256, io.SeekEnd)
+		tn, _ := f.Read(tailBuf)
+		if tn > 0 {
+			data = make([]byte, hn+tn)
+			copy(data, head)
+			copy(data[hn:], tailBuf[:tn])
+		} else {
+			data = head
+		}
+	} else {
+		// Small file — read the whole thing (up to 512 bytes).
+		// We already have the first 256. Read more if available.
+		moreBuf := make([]byte, 256)
+		mn, _ := f.Read(moreBuf)
+		if mn > 0 {
+			data = make([]byte, hn+mn)
+			copy(data, head)
+			copy(data[hn:], moreBuf[:mn])
+		} else {
+			data = head
+		}
+	}
+
+	return classifyContent(string(data))
 }
 
 func classifyContent(data string) ContentClass {
