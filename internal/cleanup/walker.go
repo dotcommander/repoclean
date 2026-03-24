@@ -152,8 +152,55 @@ func Walk(cfg Config) ([]FileInfo, error) {
 	}
 
 	markTracked(cfg.Path, files)
+	patterns := loadIgnorePatterns(cfg.Path)
+	markSuppressed(files, patterns)
 
 	return files, nil
+}
+
+// loadIgnorePatterns reads .repocleanignore from root and returns glob patterns.
+// Format: one pattern per line, # comments, blank lines skipped.
+func loadIgnorePatterns(root string) []string {
+	f, err := os.Open(filepath.Join(root, ".repocleanignore"))
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+
+	var patterns []string
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		patterns = append(patterns, line)
+	}
+	return patterns
+}
+
+// markSuppressed sets Suppressed=true on files matching .repocleanignore patterns.
+func markSuppressed(files []FileInfo, patterns []string) {
+	if len(patterns) == 0 {
+		return
+	}
+	for i := range files {
+		for _, pattern := range patterns {
+			matched, err := filepath.Match(pattern, files[i].RelPath)
+			if err != nil {
+				continue
+			}
+			if matched {
+				files[i].Suppressed = true
+				break
+			}
+			// Also match against just the filename for simple patterns like "*.log"
+			if matched2, _ := filepath.Match(pattern, filepath.Base(files[i].RelPath)); matched2 {
+				files[i].Suppressed = true
+				break
+			}
+		}
+	}
 }
 
 // isUnderNestedRepo checks if path is inside any nested repo directory.

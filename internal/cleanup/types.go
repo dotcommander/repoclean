@@ -7,6 +7,7 @@ type Config struct {
 	Path      string
 	MaxDepth  int
 	StaleDays int
+	Rules     Rules
 }
 
 // Category constants — backward compatible with bash script JSON keys.
@@ -117,6 +118,7 @@ type FileInfo struct {
 	Executable bool         // has executable permission bit
 	Orphaned   bool         // deleted from git history but still exists
 	Findings   []Finding    // normalized signals from all analyzers
+	Suppressed bool         // matched by .repocleanignore
 }
 
 // AddFinding appends a finding to the file's signal list.
