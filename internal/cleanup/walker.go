@@ -39,7 +39,7 @@ func Walk(cfg Config) ([]FileInfo, error) {
 
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			log.Println("walk warning:", err)
+			log.Println("repoclean: walk:", err)
 			return nil
 		}
 
@@ -72,7 +72,7 @@ func Walk(cfg Config) ([]FileInfo, error) {
 
 		relPath, relErr := filepath.Rel(root, path)
 		if relErr != nil {
-			log.Println("walk rel warning:", relErr)
+			log.Println("repoclean: walk:", relErr)
 			relPath = path
 		}
 
@@ -100,7 +100,7 @@ func Walk(cfg Config) ([]FileInfo, error) {
 		} else {
 			info, infoErr := d.Info()
 			if infoErr != nil {
-				log.Println("walk info warning:", infoErr)
+				log.Println("repoclean: walk:", infoErr)
 			} else {
 				fi.Size = info.Size()
 				fi.ModTime = info.ModTime()

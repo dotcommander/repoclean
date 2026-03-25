@@ -47,7 +47,7 @@ func TestClassifyContent(t *testing.T) {
 		// Bug #4: shell script with comments is NOT scratch
 		{
 			name:  "shell script comments not scratch",
-			input: "#!/bin/bash\n# This script installs dependencies\n# Author: vampire\nset -euo pipefail\napt-get update",
+			input: "#!/bin/bash\n# This script installs dependencies\n# Author: dev\nset -euo pipefail\napt-get update",
 			want:  ContentMeaningful,
 		},
 		// Bug #4: license block is NOT scratch

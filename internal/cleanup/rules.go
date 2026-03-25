@@ -22,9 +22,9 @@ type Rules struct {
 // DefaultRules returns the built-in defaults (matching the current hardcoded values).
 func DefaultRules() Rules {
 	return Rules{
-		DevArtifactPrefixes: []string{"looper", "flow"},
+		DevArtifactPrefixes: []string{},
 		DevArtifactSuffixes: []string{"_SUMMARY.md", "-spec.md", "_spec.md", "-state.json"},
-		AllowedRootMD:       []string{"README.md", "CLAUDE.md", "CHANGELOG.md", "LICENSE.md", "CONTRIBUTING.md", "SECURITY.md", "CODE_OF_CONDUCT.md", "RTK.md", "AGENTS.md"},
+		AllowedRootMD:       []string{"README.md", "CHANGELOG.md", "LICENSE.md", "CONTRIBUTING.md", "SECURITY.md", "CODE_OF_CONDUCT.md", "AGENTS.md"},
 		IgnoredDevDocSuffixes: []string{"_GUIDE.md", "_REPORT.md", "_IMPLEMENTATION.md", "_ANALYSIS.md", "_PLAN.md", "_SUMMARY.md", "_PROGRESS.md", "_RESULTS.md"},
 		IgnoredDeletePrefixes: []string{"verify-"},
 		IgnoredSafeDirs:     []string{"data/", "bin/", "cache/", ".work/"},

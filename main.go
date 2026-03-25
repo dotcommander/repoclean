@@ -25,7 +25,7 @@ func main() {
 
 	absPath, err := filepath.Abs(*path)
 	if err != nil {
-		log.Fatalf("cleanup-scanner: resolve path: %v", err)
+		log.Fatalf("repoclean: resolve path: %v", err)
 	}
 
 	cfg := cleanup.Config{
@@ -38,10 +38,10 @@ func main() {
 	start := time.Now()
 	files, err := cleanup.Walk(cfg)
 	if err != nil {
-		log.Fatalf("cleanup-scanner: walk: %v", err)
+		log.Fatalf("repoclean: walk: %v", err)
 	}
 	if time.Since(start) > 5*time.Second {
-		log.Printf("cleanup-scanner: walk took %v (large repo?)", time.Since(start))
+		log.Printf("repoclean: walk took %v (large repo?)", time.Since(start))
 	}
 
 	if *missing {
@@ -52,11 +52,11 @@ func main() {
 	}
 
 	if err := cleanup.Enrich(files, cfg); err != nil {
-		log.Printf("cleanup-scanner: enrich warning: %v", err)
+		log.Printf("repoclean: enrich warning: %v", err)
 	}
 
 	if err := cleanup.Classify(files); err != nil {
-		log.Printf("cleanup-scanner: classify warning: %v", err)
+		log.Printf("repoclean: classify warning: %v", err)
 	}
 
 	cleanup.FindDuplicates(files)
@@ -66,7 +66,7 @@ func main() {
 	result.Path = absPath
 
 	if *confirm && !*apply {
-		log.Fatal("cleanup-scanner: --confirm requires --apply")
+		log.Fatal("repoclean: --confirm requires --apply")
 	}
 
 	if *apply {
@@ -100,7 +100,7 @@ func main() {
 
 	out, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
-		log.Fatalf("cleanup-scanner: marshal: %v", err)
+		log.Fatalf("repoclean: marshal: %v", err)
 	}
 	fmt.Println(string(out))
 }

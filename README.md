@@ -64,6 +64,8 @@ If you skip `--path`, it scans the current directory.
 | `--exec` | off | Print shell commands you can copy-paste |
 | `--apply` | off | Dry-run mode — shows what would happen |
 | `--confirm` | off | Used with `--apply` to actually execute (creates tar backup first) |
+| `--findings` | off | Show findings grouped by signal type (stale, untracked, etc.) |
+| `--missing` | off | Check repo completeness (missing LICENSE, CI config, etc.) |
 
 ## Output Formats
 
@@ -89,6 +91,14 @@ Interactive mode. Without `--confirm`, shows a dry-run. With `--confirm`, it:
 
 The backup goes to `.work/archive/pre-cleanup-YYYYMMDD-HHMMSS.tar.gz`, so you can always undo.
 
+### Findings (`--findings`)
+
+Groups files by signal type (stale, untracked, orphaned, duplicate, etc.) with severity and confidence scores. Useful for understanding *why* files are flagged before deciding what to do.
+
+### Missing (`--missing`)
+
+Checks repo completeness against best practices: LICENSE, README, .gitignore, CI config, changelog, contributing guide, security policy. Returns a score and lists what's missing with severity.
+
 ## How It Works
 
 1. **Walk** — Scans the directory tree (respects `--max-depth`, skips `.git` and nested repos)
@@ -106,10 +116,36 @@ The backup goes to `.work/archive/pre-cleanup-YYYYMMDD-HHMMSS.tar.gz`, so you ca
 - **Live binaries are protected.** If `~/go/bin/` has a symlink pointing to a file in the repo, that file is untouched.
 - **Nested repos are skipped.** Directories with their own `.git` are excluded from scanning.
 
+## Configuration
+
+### Suppressing files (`.repocleanignore`)
+
+Create a `.repocleanignore` file in your repo root to suppress specific files from being flagged. One path per line (relative to repo root):
+
+```
+docs/internal-notes.md
+scripts/legacy-deploy.sh
+```
+
+### Custom rules (`~/.config/repoclean/rules.json`)
+
+Override default categorization patterns globally:
+
+```json
+{
+  "dev_artifact_prefixes": ["scratch", "draft", "temp"],
+  "allowed_root_md": ["README.md", "CHANGELOG.md", "LICENSE.md", "CONTRIBUTING.md"],
+  "scaffold_files": ["public/vite.svg", "public/favicon.ico"]
+}
+```
+
+Available fields: `dev_artifact_prefixes`, `dev_artifact_suffixes`, `allowed_root_md`, `ignored_dev_doc_suffixes`, `ignored_delete_prefixes`, `ignored_safe_dirs`, `scaffold_files`, `untrack_dirs`. Any field you set replaces the built-in default for that field.
+
 ## Requirements
 
-- Go 1.22+ (built with Go 1.26)
+- Go 1.22+
 - Git (uses `git ls-files` and `git log` for enrichment)
+- No external dependencies — stdlib only
 
 ## License
 

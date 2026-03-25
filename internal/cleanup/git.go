@@ -16,13 +16,13 @@ import (
 func Enrich(files []FileInfo, cfg Config) error {
 	stalenessMap, err := allFileStaleness(cfg)
 	if err != nil {
-		log.Printf("cleanup: git bulk staleness skipped: %v", err)
+		log.Printf("repoclean: git bulk staleness skipped: %v", err)
 		stalenessMap = nil
 	}
 
 	deletedSet, err := recentlyDeleted(cfg)
 	if err != nil {
-		log.Printf("cleanup: git orphan check skipped: %v", err)
+		log.Printf("repoclean: git orphan check skipped: %v", err)
 		deletedSet = nil
 	}
 

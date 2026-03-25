@@ -55,10 +55,6 @@ var (
 func isDeleteCandidate(f *FileInfo) (bool, string) {
 	name := filepath.Base(f.RelPath)
 
-	if strings.HasPrefix(name, ".looper") {
-		return true, "looper remnant"
-	}
-
 	if deleteNames[name] {
 		return true, "system file"
 	}
@@ -84,7 +80,7 @@ func isDevArtifact(f *FileInfo, rules Rules) bool {
 		return false
 	}
 	// Dev artifacts are loose scratch files, not nested reference docs.
-	// Only match files at most 2 levels deep (e.g., "looper.md" or "scripts/flow-state.json").
+	// Only match files at most 2 levels deep (e.g., "draft.md" or "scripts/scratch-state.json").
 	if strings.Count(f.RelPath, "/") > 1 {
 		return false
 	}
@@ -321,10 +317,8 @@ func Categorize(files []FileInfo, cfg Config) ScanResult {
 
 		// Skip dotfiles and dotdirs unless whitelisted.
 		// Only check dot-entries we have specific concerns about.
-		// Exception: .looper* remnants are always caught and deleted.
 		isDot := strings.HasPrefix(name, ".") || strings.HasPrefix(f.RelPath, ".")
-		isLooper := strings.HasPrefix(name, ".looper")
-		if isDot && !isLooper && !dotfileWhitelist[name] && !strings.HasPrefix(name, ".env.") {
+		if isDot && !dotfileWhitelist[name] && !strings.HasPrefix(name, ".env.") {
 			continue
 		}
 

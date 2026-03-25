@@ -1,5 +1,11 @@
+# Compiled binary
+/repoclean
+
 # OS artifacts
 .DS_Store
 
-# Compiled binary
-/repoclean
+# Internal working directory
+.work/
+
+# Claude Code config (not relevant to users)
+CLAUDE.md

@@ -234,7 +234,7 @@ func runCommands(cmds []cleanupCmd, dir string) {
 	if len(targets) > 0 {
 		tarPath, err := createBackup(dir, targets)
 		if err != nil {
-			log.Fatalf("cleanup-scanner: backup failed: %v", err)
+			log.Fatalf("repoclean: backup failed: %v", err)
 		}
 		if tarPath != "" {
 			rel, _ := filepath.Rel(dir, tarPath)
