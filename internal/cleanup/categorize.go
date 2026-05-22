@@ -13,10 +13,10 @@ import (
 var (
 	// Dotfiles/dotdirs we actually care about — everything else is skipped.
 	dotfileWhitelist = map[string]bool{
-		".DS_Store":      true,
-		".env":           true,
-		".pytest_cache":  true,
-		".mypy_cache":    true,
+		".DS_Store":     true,
+		".env":          true,
+		".pytest_cache": true,
+		".mypy_cache":   true,
 	}
 	deleteNames = map[string]bool{
 		".DS_Store": true, "Thumbs.db": true, "desktop.ini": true,
@@ -325,6 +325,12 @@ func Categorize(files []FileInfo, cfg Config) ScanResult {
 		// Ignored files: selectively clean dev junk, skip expected runtime data.
 		if f.Ignored {
 			if f.IsDir {
+				continue
+			}
+			if deleteNames[name] {
+				addResult(&result.DeleteCandidates, FileCandidate{
+					File: f.RelPath, Reason: "ignored system file", SizeKB: f.Size / 1024,
+				}, f.Findings, StatusDelete, "ignored system file")
 				continue
 			}
 			// Files in safe dirs (data/, bin/ primary, cache/) — always skip.
