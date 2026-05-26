@@ -40,8 +40,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("repoclean: walk: %v", err)
 	}
-	if time.Since(start) > 5*time.Second {
-		log.Printf("repoclean: walk took %v (large repo?)", time.Since(start))
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		log.Printf("repoclean: walk took %v (large repo?)", elapsed)
 	}
 
 	if *missing {
@@ -76,7 +76,9 @@ func main() {
 			return
 		}
 		if *confirm {
-			runCommands(cmds, absPath)
+			if err := runCommands(cmds, absPath); err != nil {
+				log.Fatalf("repoclean: apply: %v", err)
+			}
 		} else {
 			dryRun(cmds)
 		}

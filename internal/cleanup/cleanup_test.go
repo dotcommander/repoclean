@@ -10,6 +10,7 @@ import (
 // --- classifyContent tests ---
 
 func TestClassifyContent(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		input string
@@ -79,6 +80,7 @@ func TestClassifyContent(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			got := classifyContent(tc.input)
 			if got != tc.want {
 				t.Errorf("classifyContent() = %s, want %s\ninput: %q",
@@ -91,6 +93,7 @@ func TestClassifyContent(t *testing.T) {
 // --- isKVLine tests ---
 
 func TestIsKVLine(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		line string
 		want bool
@@ -99,14 +102,15 @@ func TestIsKVLine(t *testing.T) {
 		{"name: foo", true},
 		{"DEBUG = true", true},
 		{"This is a sentence: with a colon.", false}, // key has spaces
-		{"Another thought: quite deep.", false},       // key has spaces
-		{"multi word key: value", false},               // key has spaces
-		{"x: y", true},                                 // short key OK
-		{strings.Repeat("a", 50) + ": value", false},  // key too long
+		{"Another thought: quite deep.", false},      // key has spaces
+		{"multi word key: value", false},             // key has spaces
+		{"x: y", true},                               // short key OK
+		{strings.Repeat("a", 50) + ": value", false}, // key too long
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.line, func(t *testing.T) {
+			t.Parallel()
 			got := isKVLine(tc.line)
 			if got != tc.want {
 				t.Errorf("isKVLine(%q) = %v, want %v", tc.line, got, tc.want)
@@ -173,6 +177,7 @@ func TestScore(t *testing.T) {
 // --- FindDuplicates tests ---
 
 func TestFindDuplicates(t *testing.T) {
+	t.Parallel()
 	files := []FileInfo{
 		// Backup suffix: config-backup.yaml → config.yaml
 		{RelPath: "config.yaml", Size: 100},
@@ -366,8 +371,9 @@ func TestMarkSuppressed(t *testing.T) {
 		{RelPath: "important.go"},
 		{RelPath: "scratch.tmp"},
 		{RelPath: "docs/notes.md"},
+		{RelPath: "docs/private/plan.md"},
 	}
-	patterns := []string{"flow-state.json", "*.tmp"}
+	patterns := []string{"flow-state.json", "*.tmp", "docs/private/"}
 	markSuppressed(files, patterns)
 
 	if !files[0].Suppressed {
@@ -381,6 +387,9 @@ func TestMarkSuppressed(t *testing.T) {
 	}
 	if files[3].Suppressed {
 		t.Error("docs/notes.md should not be suppressed")
+	}
+	if !files[4].Suppressed {
+		t.Error("docs/private/plan.md should be suppressed by directory pattern")
 	}
 }
 

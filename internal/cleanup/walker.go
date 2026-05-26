@@ -3,13 +3,20 @@ package cleanup
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"io/fs"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
+
+// defaultGitTimeout bounds `git ls-files` probes so a wedged or hanging git
+// invocation cannot stall a repoclean scan. Set generous: 30s covers very
+// large repos while still failing fast if git is hung.
+const defaultGitTimeout = 30 * time.Second
 
 // skipDirs are directories we add as entries but do not descend into.
 var skipDirs = map[string]bool{
@@ -186,21 +193,29 @@ func markSuppressed(files []FileInfo, patterns []string) {
 	}
 	for i := range files {
 		for _, pattern := range patterns {
-			matched, err := filepath.Match(pattern, files[i].RelPath)
-			if err != nil {
-				continue
-			}
-			if matched {
-				files[i].Suppressed = true
-				break
-			}
-			// Also match against just the filename for simple patterns like "*.log"
-			if matched2, _ := filepath.Match(pattern, filepath.Base(files[i].RelPath)); matched2 {
+			if matchesIgnorePattern(pattern, files[i].RelPath) {
 				files[i].Suppressed = true
 				break
 			}
 		}
 	}
+}
+
+func matchesIgnorePattern(pattern, relPath string) bool {
+	dirPattern := strings.HasSuffix(pattern, "/") || strings.HasSuffix(pattern, string(os.PathSeparator))
+	pattern = filepath.Clean(pattern)
+	if dirPattern {
+		prefix := strings.TrimSuffix(pattern, string(os.PathSeparator))
+		return relPath == prefix || strings.HasPrefix(relPath, prefix+string(os.PathSeparator))
+	}
+	if matched, err := filepath.Match(pattern, relPath); err == nil && matched {
+		return true
+	}
+	// Also match against just the filename for simple patterns like "*.log".
+	if matched, err := filepath.Match(pattern, filepath.Base(relPath)); err == nil && matched {
+		return true
+	}
+	return false
 }
 
 // isUnderNestedRepo checks if path is inside any nested repo directory.
@@ -213,43 +228,42 @@ func isUnderNestedRepo(path string, repos map[string]bool) bool {
 	return false
 }
 
+// gitFileSet runs a git ls-files command and returns the output lines as an
+// absolute-path set. Returns nil on error (caller treats absence as unknown).
+func gitFileSet(ctx context.Context, root string, args ...string) map[string]bool {
+	cmd := exec.CommandContext(ctx, "git", append([]string{"ls-files"}, args...)...)
+	cmd.Dir = root
+	out, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+	set := make(map[string]bool)
+	sc := bufio.NewScanner(bytes.NewReader(out))
+	for sc.Scan() {
+		if line := sc.Text(); line != "" {
+			set[filepath.Join(root, line)] = true
+		}
+	}
+	return set
+}
+
 // markTracked runs git ls-files to identify tracked and ignored files.
 // Three states: Tracked=true (in git), Ignored=true (matched .gitignore),
 // or both false (untracked, visible to cleanup).
 func markTracked(root string, files []FileInfo) {
-	// Get tracked files.
-	cmd := exec.Command("git", "ls-files")
-	cmd.Dir = root
-	out, err := cmd.Output()
-	if err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), defaultGitTimeout)
+	defer cancel()
+
+	tracked := gitFileSet(ctx, root)
+	if tracked == nil {
 		return
 	}
-
-	tracked := make(map[string]bool)
-	sc := bufio.NewScanner(bytes.NewReader(out))
-	for sc.Scan() {
-		if line := sc.Text(); line != "" {
-			tracked[filepath.Join(root, line)] = true
-		}
-	}
-
-	// Get ignored files.
-	cmd2 := exec.Command("git", "ls-files", "--others", "--ignored", "--exclude-standard")
-	cmd2.Dir = root
-	out2, _ := cmd2.Output()
-
-	ignored := make(map[string]bool)
-	sc2 := bufio.NewScanner(bytes.NewReader(out2))
-	for sc2.Scan() {
-		if line := sc2.Text(); line != "" {
-			ignored[filepath.Join(root, line)] = true
-		}
-	}
+	ignored := gitFileSet(ctx, root, "--others", "--ignored", "--exclude-standard")
 
 	for i := range files {
 		if !files[i].IsDir {
 			files[i].Tracked = tracked[files[i].Path]
-			files[i].Ignored = ignored[files[i].Path]
+			files[i].Ignored = ignored != nil && ignored[files[i].Path]
 		}
 	}
 }
