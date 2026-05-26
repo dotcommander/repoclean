@@ -1,8 +1,8 @@
 package main
 
 import (
+	"context"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +10,15 @@ import (
 	"time"
 
 	"github.com/dotcommander/repoclean/internal/cleanup"
+)
+
+// Per-operation timeouts bounding external subprocess invocations so a hung
+// tar or apply command cannot wedge the cleanup workflow. Each is generous
+// enough for very large repos but short enough to surface a hang in a real
+// session.
+const (
+	defaultBackupTimeout  = 5 * time.Minute
+	defaultCommandTimeout = 1 * time.Minute
 )
 
 func shellQuote(path string) string {
@@ -25,10 +34,27 @@ type cleanupCmd struct {
 	Comment  bool     // true = informational, don't execute
 }
 
+func archiveDest(archiveDir, relPath string) string {
+	clean := filepath.Clean(relPath)
+	if clean == "." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || filepath.IsAbs(clean) {
+		return filepath.Join(archiveDir, filepath.Base(relPath))
+	}
+	return filepath.Join(archiveDir, clean)
+}
+
+func appendMkdir(cmds []cleanupCmd, category, dir string, seen map[string]bool) []cleanupCmd {
+	if dir == "." || dir == "" || seen[dir] {
+		return cmds
+	}
+	seen[dir] = true
+	return append(cmds, cleanupCmd{Category: category, Args: []string{"mkdir", "-p", dir}})
+}
+
 func buildCommands(result cleanup.ScanResult) []cleanupCmd {
 	var cmds []cleanupCmd
 	date := time.Now().Format("2006-01-02")
 	archiveDir := ".work/archive/" + date
+	mkdirs := map[string]bool{}
 
 	needsArchive := len(result.ArchiveCandidates) > 0 || len(result.DevArtifactCandidates) > 0
 	for _, c := range result.MisplacedScripts {
@@ -38,52 +64,56 @@ func buildCommands(result cleanup.ScanResult) []cleanupCmd {
 		}
 	}
 	if needsArchive {
-		cmds = append(cmds, cleanupCmd{Category: "setup", Args: []string{"mkdir", "-p", archiveDir}})
+		cmds = appendMkdir(cmds, "setup", archiveDir, mkdirs)
 	}
 
 	for _, c := range result.DeleteCandidates {
 		if strings.HasSuffix(c.Reason, "directory") {
-			cmds = append(cmds, cleanupCmd{Category: "delete", Args: []string{"rm", "-rf", c.File}})
+			cmds = append(cmds, cleanupCmd{Category: "delete", Args: []string{"rm", "-rf", "--", c.File}})
 		} else {
-			cmds = append(cmds, cleanupCmd{Category: "delete", Args: []string{"rm", "-f", c.File}})
+			cmds = append(cmds, cleanupCmd{Category: "delete", Args: []string{"rm", "-f", "--", c.File}})
 		}
 	}
 
 	for _, c := range result.DevArtifactCandidates {
-		dest := archiveDir + "/" + filepath.Base(c.File)
+		dest := archiveDest(archiveDir, c.File)
+		cmds = appendMkdir(cmds, "dev_artifact", filepath.Dir(dest), mkdirs)
 		cmds = append(cmds,
-			cleanupCmd{Category: "dev_artifact", Args: []string{"git", "rm", "--cached", c.File}},
-			cleanupCmd{Category: "dev_artifact", Args: []string{"mv", c.File, dest}},
+			cleanupCmd{Category: "dev_artifact", Args: []string{"git", "rm", "--cached", "--", c.File}},
+			cleanupCmd{Category: "dev_artifact", Args: []string{"mv", "--", c.File, dest}},
 		)
 	}
 
 	for _, c := range result.ArchiveCandidates {
-		dest := archiveDir + "/" + filepath.Base(c.File)
-		cmds = append(cmds, cleanupCmd{Category: "archive", Args: []string{"mv", c.File, dest}})
+		dest := archiveDest(archiveDir, c.File)
+		cmds = appendMkdir(cmds, "archive", filepath.Dir(dest), mkdirs)
+		cmds = append(cmds, cleanupCmd{Category: "archive", Args: []string{"mv", "--", c.File, dest}})
 	}
 
 	for _, c := range result.MisplacedDocs {
 		cmds = append(cmds,
 			cleanupCmd{Category: "misplaced_docs", Args: []string{"mkdir", "-p", "docs"}},
-			cleanupCmd{Category: "misplaced_docs", Args: []string{"git", "mv", c.File, "docs/" + c.File}},
+			cleanupCmd{Category: "misplaced_docs", Args: []string{"git", "mv", "--", c.File, "docs/" + c.File}},
 		)
 	}
 
 	for _, c := range result.MisplacedScripts {
 		if c.Referenced != nil && *c.Referenced {
-			cmds = append(cmds, cleanupCmd{Category: "misplaced_scripts", Args: []string{"git", "mv", c.File, "scripts/" + c.File}})
+			cmds = appendMkdir(cmds, "misplaced_scripts", "scripts", mkdirs)
+			cmds = append(cmds, cleanupCmd{Category: "misplaced_scripts", Args: []string{"git", "mv", "--", c.File, "scripts/" + c.File}})
 		} else {
-			dest := archiveDir + "/" + filepath.Base(c.File)
-			cmds = append(cmds, cleanupCmd{Category: "misplaced_scripts", Args: []string{"mv", c.File, dest}})
+			dest := archiveDest(archiveDir, c.File)
+			cmds = appendMkdir(cmds, "misplaced_scripts", filepath.Dir(dest), mkdirs)
+			cmds = append(cmds, cleanupCmd{Category: "misplaced_scripts", Args: []string{"mv", "--", c.File, dest}})
 		}
 	}
 
 	for _, c := range result.RenameDocs {
-		cmds = append(cmds, cleanupCmd{Category: "rename_docs", Args: []string{"git", "mv", c.File, c.Target}})
+		cmds = append(cmds, cleanupCmd{Category: "rename_docs", Args: []string{"git", "mv", "--", c.File, c.Target}})
 	}
 
 	for _, c := range result.UntrackCandidates {
-		cmds = append(cmds, cleanupCmd{Category: "untrack", Args: []string{"git", "rm", "--cached", c.File}})
+		cmds = append(cmds, cleanupCmd{Category: "untrack", Args: []string{"git", "rm", "--cached", "--", c.File}})
 	}
 
 	for _, c := range result.LargeFiles {
@@ -168,8 +198,8 @@ func collectTargets(cmds []cleanupCmd) []string {
 			}
 		case "mv":
 			// source is second-to-last
-			if len(c.Args) >= 3 {
-				p := c.Args[1]
+			if len(c.Args) >= 4 {
+				p := c.Args[len(c.Args)-2]
 				if !seen[p] {
 					paths = append(paths, p)
 					seen[p] = true
@@ -183,7 +213,7 @@ func collectTargets(cmds []cleanupCmd) []string {
 					p = c.Args[len(c.Args)-1]
 				} else {
 					// git mv src dest — back up src
-					p = c.Args[2]
+					p = c.Args[len(c.Args)-2]
 				}
 				if !seen[p] {
 					paths = append(paths, p)
@@ -220,21 +250,26 @@ func createBackup(dir string, targets []string) (string, error) {
 
 	args := []string{"czf", tarPath, "-C", dir}
 	args = append(args, existing...)
-	cmd := exec.Command("tar", args...)
+	ctx, cancel := context.WithTimeout(context.Background(), defaultBackupTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "tar", args...)
 	cmd.Dir = dir
 	if out, err := cmd.CombinedOutput(); err != nil {
+		if ctx.Err() != nil {
+			return "", fmt.Errorf("tar timed out after %s: %w", defaultBackupTimeout, ctx.Err())
+		}
 		return "", fmt.Errorf("tar: %v\n%s", err, out)
 	}
 	return tarPath, nil
 }
 
-func runCommands(cmds []cleanupCmd, dir string) {
+func runCommands(cmds []cleanupCmd, dir string) error {
 	// Back up all files that will be touched.
 	targets := collectTargets(cmds)
 	if len(targets) > 0 {
 		tarPath, err := createBackup(dir, targets)
 		if err != nil {
-			log.Fatalf("repoclean: backup failed: %v", err)
+			return fmt.Errorf("backup failed: %w", err)
 		}
 		if tarPath != "" {
 			rel, _ := filepath.Rel(dir, tarPath)
@@ -265,11 +300,17 @@ func runCommands(cmds []cleanupCmd, dir string) {
 		}
 
 		fmt.Printf("  %s", display)
-		cmd := exec.Command(c.Args[0], c.Args[1:]...)
+		ctx, cancel := context.WithTimeout(context.Background(), defaultCommandTimeout)
+		cmd := exec.CommandContext(ctx, c.Args[0], c.Args[1:]...)
 		cmd.Dir = dir
 		out, err := cmd.CombinedOutput()
+		cancel()
 		if err != nil {
-			fmt.Printf(" FAIL: %v\n", err)
+			if ctx.Err() != nil {
+				fmt.Printf(" TIMEOUT after %s: %v\n", defaultCommandTimeout, ctx.Err())
+			} else {
+				fmt.Printf(" FAIL: %v\n", err)
+			}
 			if len(out) > 0 {
 				fmt.Printf("    %s\n", strings.TrimSpace(string(out)))
 			}
@@ -281,4 +322,8 @@ func runCommands(cmds []cleanupCmd, dir string) {
 	}
 
 	fmt.Printf("\ndone: %d executed, %d skipped, %d failed\n", executed, skipped, failed)
+	if failed > 0 {
+		return fmt.Errorf("%d command(s) failed", failed)
+	}
+	return nil
 }
