@@ -111,3 +111,30 @@ func TestRunCommandsReturnsErrorOnCommandFailure(t *testing.T) {
 		t.Fatalf("dest.txt exists or stat failed unexpectedly: %v", statErr)
 	}
 }
+
+func TestRunCommandsBacksUpLeadingDashPaths(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "-scratch.tmp"), []byte("scratch"), 0o644); err != nil {
+		t.Fatalf("write leading-dash file: %v", err)
+	}
+
+	err := runCommands([]cleanupCmd{{
+		Category: "test",
+		Args:     []string{"rm", "-f", "--", "-scratch.tmp"},
+	}}, dir)
+	if err != nil {
+		t.Fatalf("runCommands returned error: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "-scratch.tmp")); !os.IsNotExist(statErr) {
+		t.Fatalf("-scratch.tmp still exists or stat failed unexpectedly: %v", statErr)
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, ".work", "archive", "pre-cleanup-*.tar.gz"))
+	if err != nil {
+		t.Fatalf("glob backup archive: %v", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("backup archive count = %d, want 1: %v", len(matches), matches)
+	}
+}

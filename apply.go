@@ -248,7 +248,7 @@ func createBackup(dir string, targets []string) (string, error) {
 		return "", nil
 	}
 
-	args := []string{"czf", tarPath, "-C", dir}
+	args := []string{"czf", tarPath, "-C", dir, "--"}
 	args = append(args, existing...)
 	ctx, cancel := context.WithTimeout(context.Background(), defaultBackupTimeout)
 	defer cancel()
