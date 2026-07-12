@@ -1,6 +1,9 @@
 package main
 
 import (
+	"archive/tar"
+	"compress/gzip"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -136,5 +139,51 @@ func TestRunCommandsBacksUpLeadingDashPaths(t *testing.T) {
 	}
 	if len(matches) != 1 {
 		t.Fatalf("backup archive count = %d, want 1: %v", len(matches), matches)
+	}
+	f, err := os.Open(matches[0])
+	if err != nil {
+		t.Fatalf("open backup archive: %v", err)
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		t.Fatalf("open backup gzip: %v", err)
+	}
+	defer gz.Close()
+	tr := tar.NewReader(gz)
+	header, err := tr.Next()
+	if err != nil {
+		t.Fatalf("read backup header: %v", err)
+	}
+	if header.Name != "-scratch.tmp" {
+		t.Fatalf("backup entry = %q, want -scratch.tmp", header.Name)
+	}
+	contents, err := io.ReadAll(tr)
+	if err != nil {
+		t.Fatalf("read backup contents: %v", err)
+	}
+	if string(contents) != "scratch" {
+		t.Fatalf("backup contents = %q, want scratch", contents)
+	}
+}
+
+func TestExecuteFilesystemActionsWithoutPATHTools(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "source"), []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	actions := []cleanupCmd{
+		{Kind: actionMkdir, Target: "archive"},
+		{Kind: actionMove, Source: "source", Target: "archive/moved"},
+		{Kind: actionRemove, Target: "archive/moved"},
+	}
+	for _, action := range actions {
+		if _, err := executeAction(action, dir); err != nil {
+			t.Fatalf("execute filesystem action: %v", err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "archive", "moved")); !os.IsNotExist(err) {
+		t.Fatalf("moved file still exists or stat failed unexpectedly: %v", err)
 	}
 }

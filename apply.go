@@ -1,8 +1,11 @@
 package main
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,14 +15,7 @@ import (
 	"github.com/dotcommander/repoclean/internal/cleanup"
 )
 
-// Per-operation timeouts bounding external subprocess invocations so a hung
-// tar or apply command cannot wedge the cleanup workflow. Each is generous
-// enough for very large repos but short enough to surface a hang in a real
-// session.
-const (
-	defaultBackupTimeout  = 5 * time.Minute
-	defaultCommandTimeout = 1 * time.Minute
-)
+const defaultCommandTimeout = 1 * time.Minute
 
 func shellQuote(path string) string {
 	if strings.ContainsAny(path, " \t'\"\\$`!#&|;(){}[]<>?*~") {
@@ -32,7 +28,19 @@ type cleanupCmd struct {
 	Category string   // section label
 	Args     []string // command + args (no shell interpolation)
 	Comment  bool     // true = informational, don't execute
+	Kind     actionKind
+	Source   string
+	Target   string
 }
+
+type actionKind int
+
+const (
+	actionCommand actionKind = iota
+	actionMkdir
+	actionRemove
+	actionMove
+)
 
 func archiveDest(archiveDir, relPath string) string {
 	clean := filepath.Clean(relPath)
@@ -47,7 +55,7 @@ func appendMkdir(cmds []cleanupCmd, category, dir string, seen map[string]bool) 
 		return cmds
 	}
 	seen[dir] = true
-	return append(cmds, cleanupCmd{Category: category, Args: []string{"mkdir", "-p", dir}})
+	return append(cmds, cleanupCmd{Category: category, Args: []string{"mkdir", "-p", dir}, Kind: actionMkdir, Target: dir})
 }
 
 func buildCommands(result cleanup.ScanResult) []cleanupCmd {
@@ -69,9 +77,9 @@ func buildCommands(result cleanup.ScanResult) []cleanupCmd {
 
 	for _, c := range result.DeleteCandidates {
 		if strings.HasSuffix(c.Reason, "directory") {
-			cmds = append(cmds, cleanupCmd{Category: "delete", Args: []string{"rm", "-rf", "--", c.File}})
+			cmds = append(cmds, cleanupCmd{Category: "delete", Args: []string{"rm", "-rf", "--", c.File}, Kind: actionRemove, Target: c.File})
 		} else {
-			cmds = append(cmds, cleanupCmd{Category: "delete", Args: []string{"rm", "-f", "--", c.File}})
+			cmds = append(cmds, cleanupCmd{Category: "delete", Args: []string{"rm", "-f", "--", c.File}, Kind: actionRemove, Target: c.File})
 		}
 	}
 
@@ -80,19 +88,19 @@ func buildCommands(result cleanup.ScanResult) []cleanupCmd {
 		cmds = appendMkdir(cmds, "dev_artifact", filepath.Dir(dest), mkdirs)
 		cmds = append(cmds,
 			cleanupCmd{Category: "dev_artifact", Args: []string{"git", "rm", "--cached", "--", c.File}},
-			cleanupCmd{Category: "dev_artifact", Args: []string{"mv", "--", c.File, dest}},
+			cleanupCmd{Category: "dev_artifact", Args: []string{"mv", "--", c.File, dest}, Kind: actionMove, Source: c.File, Target: dest},
 		)
 	}
 
 	for _, c := range result.ArchiveCandidates {
 		dest := archiveDest(archiveDir, c.File)
 		cmds = appendMkdir(cmds, "archive", filepath.Dir(dest), mkdirs)
-		cmds = append(cmds, cleanupCmd{Category: "archive", Args: []string{"mv", "--", c.File, dest}})
+		cmds = append(cmds, cleanupCmd{Category: "archive", Args: []string{"mv", "--", c.File, dest}, Kind: actionMove, Source: c.File, Target: dest})
 	}
 
 	for _, c := range result.MisplacedDocs {
 		cmds = append(cmds,
-			cleanupCmd{Category: "misplaced_docs", Args: []string{"mkdir", "-p", "docs"}},
+			cleanupCmd{Category: "misplaced_docs", Args: []string{"mkdir", "-p", "docs"}, Kind: actionMkdir, Target: "docs"},
 			cleanupCmd{Category: "misplaced_docs", Args: []string{"git", "mv", "--", c.File, "docs/" + c.File}},
 		)
 	}
@@ -104,7 +112,7 @@ func buildCommands(result cleanup.ScanResult) []cleanupCmd {
 		} else {
 			dest := archiveDest(archiveDir, c.File)
 			cmds = appendMkdir(cmds, "misplaced_scripts", filepath.Dir(dest), mkdirs)
-			cmds = append(cmds, cleanupCmd{Category: "misplaced_scripts", Args: []string{"mv", "--", c.File, dest}})
+			cmds = append(cmds, cleanupCmd{Category: "misplaced_scripts", Args: []string{"mv", "--", c.File, dest}, Kind: actionMove, Source: c.File, Target: dest})
 		}
 	}
 
@@ -188,16 +196,28 @@ func collectTargets(cmds []cleanupCmd) []string {
 		if c.Comment || len(c.Args) < 2 {
 			continue
 		}
+		if c.Kind == actionRemove {
+			if !seen[c.Target] {
+				paths = append(paths, c.Target)
+				seen[c.Target] = true
+			}
+			continue
+		}
+		if c.Kind == actionMove {
+			if !seen[c.Source] {
+				paths = append(paths, c.Source)
+				seen[c.Source] = true
+			}
+			continue
+		}
 		switch c.Args[0] {
 		case "rm":
-			// last arg is the path
 			p := c.Args[len(c.Args)-1]
 			if !seen[p] {
 				paths = append(paths, p)
 				seen[p] = true
 			}
 		case "mv":
-			// source is second-to-last
 			if len(c.Args) >= 4 {
 				p := c.Args[len(c.Args)-2]
 				if !seen[p] {
@@ -248,19 +268,103 @@ func createBackup(dir string, targets []string) (string, error) {
 		return "", nil
 	}
 
-	args := []string{"czf", tarPath, "-C", dir, "--"}
-	args = append(args, existing...)
-	ctx, cancel := context.WithTimeout(context.Background(), defaultBackupTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "tar", args...)
-	cmd.Dir = dir
-	if out, err := cmd.CombinedOutput(); err != nil {
-		if ctx.Err() != nil {
-			return "", fmt.Errorf("tar timed out after %s: %w", defaultBackupTimeout, ctx.Err())
+	out, err := os.Create(tarPath)
+	if err != nil {
+		return "", fmt.Errorf("create backup: %w", err)
+	}
+	gz := gzip.NewWriter(out)
+	tw := tar.NewWriter(gz)
+	for _, name := range existing {
+		if err := addBackupPath(tw, dir, name); err != nil {
+			tw.Close()
+			gz.Close()
+			out.Close()
+			return "", err
 		}
-		return "", fmt.Errorf("tar: %v\n%s", err, out)
+	}
+	if err := tw.Close(); err != nil {
+		return "", fmt.Errorf("finish backup tar: %w", err)
+	}
+	if err := gz.Close(); err != nil {
+		return "", fmt.Errorf("finish backup gzip: %w", err)
+	}
+	if err := out.Close(); err != nil {
+		return "", fmt.Errorf("close backup: %w", err)
 	}
 	return tarPath, nil
+}
+
+func addBackupPath(tw *tar.Writer, root, name string) error {
+	full := name
+	if !filepath.IsAbs(full) {
+		full = filepath.Join(root, full)
+	}
+	return filepath.Walk(full, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return fmt.Errorf("read backup path %s: %w", name, err)
+		}
+		header, err := tar.FileInfoHeader(info, "")
+		if err != nil {
+			return fmt.Errorf("archive %s: %w", path, err)
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == ".." {
+			return fmt.Errorf("backup path %q is outside scan root", name)
+		}
+		header.Name = filepath.ToSlash(rel)
+		if info.Mode()&os.ModeSymlink != 0 {
+			header.Linkname, err = os.Readlink(path)
+			if err != nil {
+				return fmt.Errorf("read backup symlink %s: %w", path, err)
+			}
+		}
+		if err := tw.WriteHeader(header); err != nil {
+			return fmt.Errorf("write backup header %s: %w", path, err)
+		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		f, err := os.Open(path)
+		if err != nil {
+			return fmt.Errorf("open backup file %s: %w", path, err)
+		}
+		_, copyErr := io.Copy(tw, f)
+		closeErr := f.Close()
+		if copyErr != nil {
+			return fmt.Errorf("copy backup file %s: %w", path, copyErr)
+		}
+		if closeErr != nil {
+			return fmt.Errorf("close backup file %s: %w", path, closeErr)
+		}
+		return nil
+	})
+}
+
+func executeAction(c cleanupCmd, dir string) ([]byte, error) {
+	resolve := func(path string) string {
+		if filepath.IsAbs(path) {
+			return path
+		}
+		return filepath.Join(dir, path)
+	}
+	switch c.Kind {
+	case actionMkdir:
+		return nil, os.MkdirAll(resolve(c.Target), 0o755)
+	case actionRemove:
+		return nil, os.RemoveAll(resolve(c.Target))
+	case actionMove:
+		return nil, os.Rename(resolve(c.Source), resolve(c.Target))
+	default:
+		ctx, cancel := context.WithTimeout(context.Background(), defaultCommandTimeout)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, c.Args[0], c.Args[1:]...)
+		cmd.Dir = dir
+		out, err := cmd.CombinedOutput()
+		if ctx.Err() != nil {
+			return out, fmt.Errorf("timeout after %s: %w", defaultCommandTimeout, ctx.Err())
+		}
+		return out, err
+	}
 }
 
 func runCommands(cmds []cleanupCmd, dir string) error {
@@ -300,17 +404,9 @@ func runCommands(cmds []cleanupCmd, dir string) error {
 		}
 
 		fmt.Printf("  %s", display)
-		ctx, cancel := context.WithTimeout(context.Background(), defaultCommandTimeout)
-		cmd := exec.CommandContext(ctx, c.Args[0], c.Args[1:]...)
-		cmd.Dir = dir
-		out, err := cmd.CombinedOutput()
-		cancel()
+		out, err := executeAction(c, dir)
 		if err != nil {
-			if ctx.Err() != nil {
-				fmt.Printf(" TIMEOUT after %s: %v\n", defaultCommandTimeout, ctx.Err())
-			} else {
-				fmt.Printf(" FAIL: %v\n", err)
-			}
+			fmt.Printf(" FAIL: %v\n", err)
 			if len(out) > 0 {
 				fmt.Printf("    %s\n", strings.TrimSpace(string(out)))
 			}

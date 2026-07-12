@@ -1,6 +1,6 @@
 # repoclean
 
-A CLI tool that scans git repositories and tells you what to clean up.
+A CLI tool that scans repositories and directories and tells you what to clean up.
 
 Point it at any repo and it finds junk files, stale artifacts, misplaced docs, tracked files that shouldn't be tracked, and more. It gives you a plan — or runs it for you with a safety backup.
 
@@ -102,7 +102,7 @@ Checks repo completeness against best practices: LICENSE, README, .gitignore, CI
 ## How It Works
 
 1. **Walk** — Scans the directory tree (respects `--max-depth`, skips `.git` and nested repos)
-2. **Enrich** — Uses `git log` to calculate staleness and detect orphaned files
+2. **Enrich** — Reads repository objects to calculate staleness and detect orphaned files across all refs
 3. **Classify** — Reads the first 512 bytes of text files to determine content type (generated, scratch, log dump, config, or meaningful)
 4. **Detect Duplicates** — Finds backup copies (`*-v2`, `*-old`, `*.backup`) and same-name-same-size files
 5. **Categorize** — Applies priority-ordered rules to sort every file into an action bucket
@@ -144,8 +144,13 @@ Available fields: `dev_artifact_prefixes`, `dev_artifact_suffixes`, `allowed_roo
 ## Requirements
 
 - Go 1.22+
-- Git (uses `git ls-files` and `git log` for enrichment)
-- No external dependencies — stdlib only
+- Scanning does not require an installed Git executable
+- Confirmed Git index mutations (`git rm --cached` and `git mv`) require Git
+
+Repository reads use go-git. Exact porcelain parity, advanced worktrees,
+submodules, credential helpers, and interactive operations remain the installed
+Git executable's territory. Filesystem cleanup and backup creation use Go's
+standard library.
 
 ## License
 

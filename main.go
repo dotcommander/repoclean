@@ -36,9 +36,16 @@ func main() {
 	cfg.Rules = cleanup.LoadRules()
 
 	start := time.Now()
-	files, err := cleanup.Walk(cfg)
+	repo, repoErr := cleanup.OpenRepository(cfg.Path)
+	if repoErr != nil {
+		log.Printf("repoclean: repository metadata skipped: %v", repoErr)
+	}
+	files, err := cleanup.WalkRepository(cfg, repo)
 	if err != nil {
 		log.Fatalf("repoclean: walk: %v", err)
+	}
+	if repoErr != nil {
+		cleanup.MarkRepositoryStateUnknown(files)
 	}
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
 		log.Printf("repoclean: walk took %v (large repo?)", elapsed)
@@ -51,7 +58,7 @@ func main() {
 		return
 	}
 
-	if err := cleanup.Enrich(files, cfg); err != nil {
+	if err := cleanup.EnrichRepository(files, cfg, repo); err != nil {
 		log.Printf("repoclean: enrich warning: %v", err)
 	}
 

@@ -6,8 +6,41 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
+
+	git "github.com/go-git/go-git/v5"
 )
+
+func TestScanDoesNotRequireGitExecutable(t *testing.T) {
+	bin := buildRepocleanBinary(t)
+
+	root := t.TempDir()
+	repo, err := git.PlainInit(root, false)
+	if err != nil {
+		t.Fatalf("init repository: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("tracked"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wt.Add("tracked.txt"); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(bin, "--path", root)
+	cmd.Env = append(os.Environ(), "PATH="+t.TempDir())
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("scan without git executable: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), `"path":`) {
+		t.Fatalf("scan output is not JSON: %s", out)
+	}
+}
 
 func buildRepocleanBinary(t *testing.T) string {
 	t.Helper()
