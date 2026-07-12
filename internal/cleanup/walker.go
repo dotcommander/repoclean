@@ -2,21 +2,12 @@ package cleanup
 
 import (
 	"bufio"
-	"bytes"
-	"context"
 	"io/fs"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 )
-
-// defaultGitTimeout bounds `git ls-files` probes so a wedged or hanging git
-// invocation cannot stall a repoclean scan. Set generous: 30s covers very
-// large repos while still failing fast if git is hung.
-const defaultGitTimeout = 30 * time.Second
 
 // skipDirs are directories we add as entries but do not descend into.
 var skipDirs = map[string]bool{
@@ -33,6 +24,19 @@ var skipDirs = map[string]bool{
 // Walk returns enriched FileInfo entries for all files and selected directories
 // under cfg.Path up to cfg.MaxDepth levels deep.
 func Walk(cfg Config) ([]FileInfo, error) {
+	repo, err := OpenRepository(cfg.Path)
+	if err != nil {
+		log.Printf("repoclean: repository metadata skipped: %v", err)
+	}
+	files, walkErr := WalkRepository(cfg, repo)
+	if err != nil {
+		MarkRepositoryStateUnknown(files)
+	}
+	return files, walkErr
+}
+
+// WalkRepository walks using an already-opened repository view.
+func WalkRepository(cfg Config, repo *Repository) ([]FileInfo, error) {
 	root := cfg.Path
 	rootDepth := strings.Count(filepath.Clean(root), string(os.PathSeparator))
 
@@ -51,12 +55,15 @@ func Walk(cfg Config) ([]FileInfo, error) {
 		}
 
 		// Skip .git entirely, and record nested repos (not the root repo).
-		if d.IsDir() && d.Name() == ".git" {
+		if d.Name() == ".git" {
 			parent := filepath.Dir(path)
 			if parent != root {
 				nestedRepos[parent] = true
 			}
-			return fs.SkipDir
+			if d.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
 		}
 
 		// Depth check (root itself is depth 0).
@@ -158,11 +165,26 @@ func Walk(cfg Config) ([]FileInfo, error) {
 		files[i].IsEmpty = true
 	}
 
-	markTracked(cfg.Path, files)
+	if repo != nil {
+		if err := repo.markTracked(files); err != nil {
+			log.Printf("repoclean: repository tracked state skipped: %v", err)
+			MarkRepositoryStateUnknown(files)
+		}
+	}
 	patterns := loadIgnorePatterns(cfg.Path)
 	markSuppressed(files, patterns)
 
 	return files, nil
+}
+
+// MarkRepositoryStateUnknown prevents repository-derived cleanup decisions
+// after repository metadata was discovered but could not be read.
+func MarkRepositoryStateUnknown(files []FileInfo) {
+	for i := range files {
+		if !files[i].IsDir {
+			files[i].GitStateUnknown = true
+		}
+	}
 }
 
 // loadIgnorePatterns reads .repocleanignore from root and returns glob patterns.
@@ -226,44 +248,4 @@ func isUnderNestedRepo(path string, repos map[string]bool) bool {
 		}
 	}
 	return false
-}
-
-// gitFileSet runs a git ls-files command and returns the output lines as an
-// absolute-path set. Returns nil on error (caller treats absence as unknown).
-func gitFileSet(ctx context.Context, root string, args ...string) map[string]bool {
-	cmd := exec.CommandContext(ctx, "git", append([]string{"ls-files"}, args...)...)
-	cmd.Dir = root
-	out, err := cmd.Output()
-	if err != nil {
-		return nil
-	}
-	set := make(map[string]bool)
-	sc := bufio.NewScanner(bytes.NewReader(out))
-	for sc.Scan() {
-		if line := sc.Text(); line != "" {
-			set[filepath.Join(root, line)] = true
-		}
-	}
-	return set
-}
-
-// markTracked runs git ls-files to identify tracked and ignored files.
-// Three states: Tracked=true (in git), Ignored=true (matched .gitignore),
-// or both false (untracked, visible to cleanup).
-func markTracked(root string, files []FileInfo) {
-	ctx, cancel := context.WithTimeout(context.Background(), defaultGitTimeout)
-	defer cancel()
-
-	tracked := gitFileSet(ctx, root)
-	if tracked == nil {
-		return
-	}
-	ignored := gitFileSet(ctx, root, "--others", "--ignored", "--exclude-standard")
-
-	for i := range files {
-		if !files[i].IsDir {
-			files[i].Tracked = tracked[files[i].Path]
-			files[i].Ignored = ignored != nil && ignored[files[i].Path]
-		}
-	}
 }

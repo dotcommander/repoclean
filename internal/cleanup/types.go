@@ -12,11 +12,11 @@ type Config struct {
 
 // Category constants — backward compatible with bash script JSON keys.
 const (
-	CatDelete      = "delete_candidates"
-	CatDevArtifact = "dev_artifact_candidates"
-	CatArchive     = "archive_candidates"
-	CatBrokenLink  = "broken_links"
-	CatLargeFile   = "large_files"
+	CatDelete       = "delete_candidates"
+	CatDevArtifact  = "dev_artifact_candidates"
+	CatArchive      = "archive_candidates"
+	CatBrokenLink   = "broken_links"
+	CatLargeFile    = "large_files"
 	CatMisplaced    = "misplaced_scripts"
 	CatMisplacedDoc = "misplaced_docs"
 	CatUntrack      = "untrack_candidates"
@@ -80,10 +80,10 @@ const (
 // Finding is a normalized signal produced by any analyzer.
 type Finding struct {
 	Source     string  `json:"source"`     // producer: "git", "classify", "duplicates", "walker"
-	Rule      string  `json:"rule"`       // signal name from Rule constants
-	Severity  int     `json:"severity"`   // SevInfo, SevWarn, SevError
+	Rule       string  `json:"rule"`       // signal name from Rule constants
+	Severity   int     `json:"severity"`   // SevInfo, SevWarn, SevError
 	Confidence float64 `json:"confidence"` // 0.0-1.0
-	Message   string  `json:"message"`    // human-readable
+	Message    string  `json:"message"`    // human-readable
 }
 
 // Status labels for file inventory.
@@ -102,23 +102,24 @@ const (
 
 // FileInfo is the internal enriched representation per file.
 type FileInfo struct {
-	Path       string       // absolute
-	RelPath    string       // relative to Config.Path
-	Size       int64
-	IsDir      bool
-	IsSymlink  bool
-	IsEmpty    bool         // empty directory
-	Tracked    bool
-	Ignored    bool         // matched by .gitignore
-	StaleDays  int          // 0 = recently modified
-	ModTime    time.Time
-	Content    ContentClass
-	LinkTarget string       // for symlinks, readlink value
-	Duplicate  string       // if set, path of the original this duplicates
-	Executable bool         // has executable permission bit
-	Orphaned   bool         // deleted from git history but still exists
-	Findings   []Finding    // normalized signals from all analyzers
-	Suppressed bool         // matched by .repocleanignore
+	Path            string // absolute
+	RelPath         string // relative to Config.Path
+	Size            int64
+	IsDir           bool
+	IsSymlink       bool
+	IsEmpty         bool // empty directory
+	Tracked         bool
+	GitStateUnknown bool // repository index or ignore state could not be read
+	Ignored         bool // matched by .gitignore
+	StaleDays       int  // 0 = recently modified
+	ModTime         time.Time
+	Content         ContentClass
+	LinkTarget      string    // for symlinks, readlink value
+	Duplicate       string    // if set, path of the original this duplicates
+	Executable      bool      // has executable permission bit
+	Orphaned        bool      // deleted from git history but still exists
+	Findings        []Finding // normalized signals from all analyzers
+	Suppressed      bool      // matched by .repocleanignore
 }
 
 // AddFinding appends a finding to the file's signal list.

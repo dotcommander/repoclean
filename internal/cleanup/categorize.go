@@ -534,7 +534,7 @@ func Categorize(files []FileInfo, cfg Config) ScanResult {
 		}
 
 		// 9. Archive candidates (untracked, not caught above)
-		if !f.Tracked && !f.IsDir {
+		if !f.GitStateUnknown && !f.Tracked && !f.IsDir {
 			hint := f.Content.String()
 			reason := "untracked file"
 			if f.HasFinding(RuleDuplicate) {

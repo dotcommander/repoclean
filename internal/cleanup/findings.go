@@ -8,7 +8,7 @@ func EmitFindings(files []FileInfo) {
 	for i := range files {
 		f := &files[i]
 
-		if !f.Tracked {
+		if !f.GitStateUnknown && !f.Tracked {
 			f.AddFinding(Finding{Source: "walker", Rule: RuleUntracked, Severity: SevInfo, Confidence: 1.0, Message: "not tracked by git"})
 		}
 		if f.IsEmpty {
