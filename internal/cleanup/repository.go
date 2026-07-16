@@ -7,10 +7,12 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	git "github.com/go-git/go-git/v5"
+	gitconfig "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/format/gitignore"
 	"github.com/go-git/go-git/v5/plumbing/object"
@@ -33,7 +35,11 @@ func OpenRepository(scanRoot string) (*Repository, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve scan root: %w", err)
 	}
-	repo, err := git.PlainOpenWithOptions(abs, &git.PlainOpenOptions{DetectDotGit: true, EnableDotGitCommonDir: true})
+	resolvedAbs := abs
+	if resolved, resolveErr := filepath.EvalSymlinks(abs); resolveErr == nil {
+		resolvedAbs = resolved
+	}
+	repo, err := git.PlainOpenWithOptions(resolvedAbs, &git.PlainOpenOptions{DetectDotGit: true, EnableDotGitCommonDir: true})
 	if errors.Is(err, git.ErrRepositoryNotExists) {
 		return nil, nil
 	}
@@ -44,10 +50,19 @@ func OpenRepository(scanRoot string) (*Repository, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open repository worktree: %w", err)
 	}
-	root := filepath.Clean(wt.Filesystem.Root())
-	prefix, err := filepath.Rel(root, abs)
+	resolvedRoot := filepath.Clean(wt.Filesystem.Root())
+	prefix, err := filepath.Rel(resolvedRoot, resolvedAbs)
 	if err != nil {
 		return nil, fmt.Errorf("resolve repository scan prefix: %w", err)
+	}
+	if prefix == ".." || strings.HasPrefix(prefix, ".."+string(os.PathSeparator)) {
+		return nil, fmt.Errorf("scan root %q is outside repository root %q", scanRoot, resolvedRoot)
+	}
+	root := abs
+	if prefix != "." {
+		for range strings.Split(filepath.ToSlash(prefix), "/") {
+			root = filepath.Dir(root)
+		}
 	}
 	return &Repository{repo: repo, Root: root, Prefix: prefix}, nil
 }
@@ -76,11 +91,16 @@ func (r *Repository) markTracked(files []FileInfo) error {
 	if err != nil {
 		return fmt.Errorf("open repository worktree: %w", err)
 	}
-	patterns, err := gitignore.ReadPatterns(wt.Filesystem, nil)
+	patterns, err := r.configurationExcludePatterns()
+	if err != nil {
+		return fmt.Errorf("read configured ignore patterns: %w", err)
+	}
+	patterns = append(patterns, repositoryExcludePatterns(r.repo)...)
+	worktreePatterns, err := gitignore.ReadPatterns(wt.Filesystem, nil)
 	if err != nil {
 		return fmt.Errorf("read repository ignore patterns: %w", err)
 	}
-	patterns = append(patterns, repositoryExcludePatterns(r.repo)...)
+	patterns = append(patterns, worktreePatterns...)
 	matcher := gitignore.NewMatcher(patterns)
 	for i := range files {
 		if files[i].IsDir {
@@ -96,6 +116,143 @@ func (r *Repository) markTracked(files []FileInfo) error {
 		}
 	}
 	return nil
+}
+
+func (r *Repository) configurationExcludePatterns() ([]gitignore.Pattern, error) {
+	local, err := r.repo.Config()
+	if err != nil {
+		return nil, fmt.Errorf("read local Git config: %w", err)
+	}
+	if path := local.Raw.Section("core").Option("excludesfile"); path != "" {
+		return readExcludePatterns(resolveExcludePath(r.Root, path))
+	}
+
+	globalPath, err := scopeExcludePath(gitconfig.GlobalScope)
+	if err != nil {
+		return nil, fmt.Errorf("read global Git config: %w", err)
+	}
+	if globalPath != "" {
+		return readExcludePatterns(resolveExcludePath(r.Root, globalPath))
+	}
+	systemPath, err := scopeExcludePath(gitconfig.SystemScope)
+	if err != nil {
+		return nil, fmt.Errorf("read system Git config: %w", err)
+	}
+	if systemPath != "" {
+		return readExcludePatterns(resolveExcludePath(r.Root, systemPath))
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("resolve home directory: %w", err)
+	}
+	configHome := os.Getenv("XDG_CONFIG_HOME")
+	if configHome == "" {
+		configHome = filepath.Join(home, ".config")
+	}
+	return readExcludePatterns(filepath.Join(configHome, "git", "ignore"))
+}
+
+func scopeExcludePath(scope gitconfig.Scope) (string, error) {
+	cfg, err := gitconfig.LoadConfig(scope)
+	if err == nil {
+		if path := cfg.Raw.Section("core").Option("excludesfile"); path != "" {
+			return path, nil
+		}
+	}
+
+	paths, pathsErr := gitconfig.Paths(scope)
+	if pathsErr != nil {
+		return "", pathsErr
+	}
+	for _, path := range paths {
+		excludePath, found, readErr := readCoreExcludeOption(path)
+		if errors.Is(readErr, os.ErrNotExist) {
+			continue
+		}
+		if readErr != nil {
+			return "", readErr
+		}
+		if found {
+			return excludePath, nil
+		}
+	}
+	return "", nil
+}
+
+func readCoreExcludeOption(path string) (string, bool, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", false, err
+	}
+	defer f.Close()
+
+	inCore := false
+	var value string
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
+			continue
+		}
+		if strings.HasPrefix(line, "[") {
+			end := strings.IndexByte(line, ']')
+			inCore = end > 0 && strings.EqualFold(strings.TrimSpace(line[1:end]), "core")
+			continue
+		}
+		if !inCore {
+			continue
+		}
+		key, raw, found := strings.Cut(line, "=")
+		if !found || !strings.EqualFold(strings.TrimSpace(key), "excludesfile") {
+			continue
+		}
+		value = strings.TrimSpace(raw)
+		if unquoted, unquoteErr := strconv.Unquote(value); unquoteErr == nil {
+			value = unquoted
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return "", false, err
+	}
+	return value, value != "", nil
+}
+
+func resolveExcludePath(root, path string) string {
+	if path == "~" || strings.HasPrefix(path, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			path = filepath.Join(home, strings.TrimPrefix(path, "~/"))
+		}
+	}
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path)
+	}
+	return filepath.Join(root, path)
+}
+
+func readExcludePatterns(path string) ([]gitignore.Pattern, error) {
+	f, err := os.Open(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	var patterns []gitignore.Pattern
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.TrimSpace(line) == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		patterns = append(patterns, gitignore.ParsePattern(line, nil))
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return patterns, nil
 }
 
 func repositoryExcludePatterns(repo *git.Repository) []gitignore.Pattern {

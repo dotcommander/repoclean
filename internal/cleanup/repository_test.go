@@ -77,6 +77,64 @@ func TestWalkRepositoryParentDiscoveryIgnoreAndNestedRepository(t *testing.T) {
 	}
 }
 
+func TestWalkRepositoryUsesConfiguredExcludeFile(t *testing.T) {
+	root := t.TempDir()
+	repo, err := git.PlainInit(root, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, root, "configured-ignore", "*.scratch\n")
+	writeTestFile(t, root, "private.scratch", "ignored")
+
+	cfg, err := repo.Config()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Raw.SetOption("core", "", "excludesfile", "configured-ignore")
+	if err := repo.SetConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	view, err := OpenRepository(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := WalkRepository(Config{Path: root, MaxDepth: 2}, view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !filesByRelativePath(files)["private.scratch"].Ignored {
+		t.Error("core.excludesFile pattern did not mark private.scratch ignored")
+	}
+}
+
+func TestWalkRepositoryUsesGlobalExcludeFileWithUnsupportedConfigSyntax(t *testing.T) {
+	root := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+
+	excludeFile := filepath.Join(home, ".gitignore")
+	writeTestFile(t, home, ".gitignore", "*.scratch\n")
+	writeTestFile(t, home, ".gitconfig", "[core]\n\texcludesFile = \""+excludeFile+"\"\n[unsupported]\n\t.invalid = value\n")
+
+	if _, err := git.PlainInit(root, false); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, root, "private.scratch", "ignored")
+
+	view, err := OpenRepository(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := WalkRepository(Config{Path: root, MaxDepth: 2}, view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !filesByRelativePath(files)["private.scratch"].Ignored {
+		t.Error("global core.excludesFile pattern did not mark private.scratch ignored")
+	}
+}
+
 func TestWalkRepositoryDistinguishesNoRepositoryFromUnknownState(t *testing.T) {
 	root := t.TempDir()
 	writeTestFile(t, root, "loose.txt", "loose")

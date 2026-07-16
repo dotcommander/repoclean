@@ -143,7 +143,7 @@ Available fields: `dev_artifact_prefixes`, `dev_artifact_suffixes`, `allowed_roo
 
 ## Requirements
 
-- Go 1.22+
+- Go 1.25+
 - Scanning does not require an installed Git executable
 - Confirmed Git index mutations (`git rm --cached` and `git mv`) require Git
 
