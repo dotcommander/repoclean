@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.7.1 (2026-07-16)
+
+### Fixes
+- resolve symlinked scan roots before walking so tracked paths remain repository-relative
+- match Git's global configuration precedence for exclusion files
+- fail closed when included Git configuration prevents reliable ignore resolution
+- suppress cleanup candidates whenever repository or ignore state is unknown
+
 ## v0.7.0 (2026-07-16)
 
 ### Features
