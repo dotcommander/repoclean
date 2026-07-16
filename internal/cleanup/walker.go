@@ -38,6 +38,9 @@ func Walk(cfg Config) ([]FileInfo, error) {
 // WalkRepository walks using an already-opened repository view.
 func WalkRepository(cfg Config, repo *Repository) ([]FileInfo, error) {
 	root := cfg.Path
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
 	rootDepth := strings.Count(filepath.Clean(root), string(os.PathSeparator))
 
 	var files []FileInfo
@@ -177,8 +180,8 @@ func WalkRepository(cfg Config, repo *Repository) ([]FileInfo, error) {
 	return files, nil
 }
 
-// MarkRepositoryStateUnknown prevents repository-derived cleanup decisions
-// after repository metadata was discovered but could not be read.
+// MarkRepositoryStateUnknown suppresses cleanup decisions after repository
+// metadata or ignore configuration was discovered but could not be read.
 func MarkRepositoryStateUnknown(files []FileInfo) {
 	for i := range files {
 		if !files[i].IsDir {

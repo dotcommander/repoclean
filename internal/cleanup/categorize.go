@@ -306,6 +306,12 @@ func Categorize(files []FileInfo, cfg Config) ScanResult {
 			})
 			continue
 		}
+		if f.GitStateUnknown {
+			result.AllFiles = append(result.AllFiles, LabeledFile{
+				File: f.RelPath, Status: StatusClean, Reason: "repository state unknown", SizeKB: f.Size / 1024,
+			})
+			continue
+		}
 
 		name := filepath.Base(f.RelPath)
 		ext := filepath.Ext(name)

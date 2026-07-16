@@ -113,14 +113,18 @@ func TestWalkRepositoryUsesGlobalExcludeFileWithUnsupportedConfigSyntax(t *testi
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
 
-	excludeFile := filepath.Join(home, ".gitignore")
-	writeTestFile(t, home, ".gitignore", "*.scratch\n")
-	writeTestFile(t, home, ".gitconfig", "[core]\n\texcludesFile = \""+excludeFile+"\"\n[unsupported]\n\t.invalid = value\n")
+	homeExclude := filepath.Join(home, ".gitignore")
+	xdgExclude := filepath.Join(home, ".config", "git", "xdg-ignore")
+	writeTestFile(t, home, ".gitignore", "home.scratch\n")
+	writeTestFile(t, home, ".config/git/xdg-ignore", "xdg.scratch\n")
+	writeTestFile(t, home, ".config/git/config", "[core]\n\texcludesFile = \""+xdgExclude+"\"\n")
+	writeTestFile(t, home, ".gitconfig", "[core]\n\texcludesFile = \""+homeExclude+"\"\n[unsupported]\n\t.invalid = value\n")
 
 	if _, err := git.PlainInit(root, false); err != nil {
 		t.Fatal(err)
 	}
-	writeTestFile(t, root, "private.scratch", "ignored")
+	writeTestFile(t, root, "home.scratch", "ignored")
+	writeTestFile(t, root, "xdg.scratch", "visible")
 
 	view, err := OpenRepository(root)
 	if err != nil {
@@ -130,8 +134,75 @@ func TestWalkRepositoryUsesGlobalExcludeFileWithUnsupportedConfigSyntax(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !filesByRelativePath(files)["private.scratch"].Ignored {
-		t.Error("global core.excludesFile pattern did not mark private.scratch ignored")
+	byPath := filesByRelativePath(files)
+	if !byPath["home.scratch"].Ignored {
+		t.Error("higher-precedence ~/.gitconfig exclusion was not applied")
+	}
+	if byPath["xdg.scratch"].Ignored {
+		t.Error("lower-precedence XDG exclusion unexpectedly overrode ~/.gitconfig")
+	}
+}
+
+func TestWalkRepositoryMarksStateUnknownForIncludedGlobalConfig(t *testing.T) {
+	root := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	writeTestFile(t, home, ".gitconfig", "[include]\n\tpath = extra.gitconfig\n")
+	writeTestFile(t, home, "extra.gitconfig", "[core]\n\texcludesFile = ignored\n")
+
+	if _, err := git.PlainInit(root, false); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, root, "untracked.csv", "unknown")
+	view, err := OpenRepository(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := WalkRepository(Config{Path: root, MaxDepth: 2}, view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !filesByRelativePath(files)["untracked.csv"].GitStateUnknown {
+		t.Error("included global config did not conservatively mark Git state unknown")
+	}
+	result := Categorize(files, Config{Path: root, Rules: DefaultRules()})
+	for _, candidate := range result.ArchiveCandidates {
+		if candidate.File == "untracked.csv" {
+			t.Error("unknown ignore state allowed a data file cleanup candidate")
+		}
+	}
+}
+
+func TestWalkRepositoryThroughSymlinkedSubdirectory(t *testing.T) {
+	root := t.TempDir()
+	repo, err := git.PlainInit(root, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, root, "sub/tracked.txt", "tracked")
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := wt.Add("sub/tracked.txt"); err != nil {
+		t.Fatal(err)
+	}
+
+	linkRoot := filepath.Join(t.TempDir(), "scan")
+	if err := os.Symlink(filepath.Join(root, "sub"), linkRoot); err != nil {
+		t.Skipf("create directory symlink: %v", err)
+	}
+	view, err := OpenRepository(linkRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := WalkRepository(Config{Path: linkRoot, MaxDepth: 2}, view)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !filesByRelativePath(files)["tracked.txt"].Tracked {
+		t.Error("tracked file scanned through a directory symlink was marked untracked")
 	}
 }
 

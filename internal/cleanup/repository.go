@@ -23,9 +23,10 @@ import (
 // Repository is the read-only Git view shared by walking and enrichment.
 // Root and Prefix use filesystem paths; paths read from Git remain slash-separated.
 type Repository struct {
-	repo   *git.Repository
-	Root   string
-	Prefix string
+	repo         *git.Repository
+	Root         string
+	Prefix       string
+	resolvedRoot string
 }
 
 // OpenRepository discovers the repository containing scanRoot. A nil repository
@@ -64,17 +65,26 @@ func OpenRepository(scanRoot string) (*Repository, error) {
 			root = filepath.Dir(root)
 		}
 	}
-	return &Repository{repo: repo, Root: root, Prefix: prefix}, nil
+	return &Repository{repo: repo, Root: root, Prefix: prefix, resolvedRoot: resolvedRoot}, nil
 }
 
 // NewRepositoryView constructs a repository view for alternate storage-backed
 // repositories in tests and integrations.
 func NewRepositoryView(repo *git.Repository, root, scanRoot string) (*Repository, error) {
-	prefix, err := filepath.Rel(filepath.Clean(root), filepath.Clean(scanRoot))
+	resolvedScanRoot := filepath.Clean(scanRoot)
+	if resolved, err := filepath.EvalSymlinks(resolvedScanRoot); err == nil {
+		resolvedScanRoot = resolved
+	}
+	prefix, err := filepath.Rel(filepath.Clean(root), resolvedScanRoot)
 	if err != nil {
 		return nil, fmt.Errorf("resolve repository scan prefix: %w", err)
 	}
-	return &Repository{repo: repo, Root: filepath.Clean(root), Prefix: prefix}, nil
+	return &Repository{
+		repo:         repo,
+		Root:         filepath.Clean(root),
+		Prefix:       prefix,
+		resolvedRoot: filepath.Clean(root),
+	}, nil
 }
 
 func (r *Repository) markTracked(files []FileInfo) error {
@@ -123,8 +133,11 @@ func (r *Repository) configurationExcludePatterns() ([]gitignore.Pattern, error)
 	if err != nil {
 		return nil, fmt.Errorf("read local Git config: %w", err)
 	}
+	if len(local.Raw.Includes) > 0 {
+		return nil, fmt.Errorf("local Git config contains include directives")
+	}
 	if path := local.Raw.Section("core").Option("excludesfile"); path != "" {
-		return readExcludePatterns(resolveExcludePath(r.Root, path))
+		return readExcludePatterns(resolveExcludePath(r.resolvedRoot, path))
 	}
 
 	globalPath, err := scopeExcludePath(gitconfig.GlobalScope)
@@ -132,14 +145,14 @@ func (r *Repository) configurationExcludePatterns() ([]gitignore.Pattern, error)
 		return nil, fmt.Errorf("read global Git config: %w", err)
 	}
 	if globalPath != "" {
-		return readExcludePatterns(resolveExcludePath(r.Root, globalPath))
+		return readExcludePatterns(resolveExcludePath(r.resolvedRoot, globalPath))
 	}
 	systemPath, err := scopeExcludePath(gitconfig.SystemScope)
 	if err != nil {
 		return nil, fmt.Errorf("read system Git config: %w", err)
 	}
 	if systemPath != "" {
-		return readExcludePatterns(resolveExcludePath(r.Root, systemPath))
+		return readExcludePatterns(resolveExcludePath(r.resolvedRoot, systemPath))
 	}
 
 	home, err := os.UserHomeDir()
@@ -154,17 +167,11 @@ func (r *Repository) configurationExcludePatterns() ([]gitignore.Pattern, error)
 }
 
 func scopeExcludePath(scope gitconfig.Scope) (string, error) {
-	cfg, err := gitconfig.LoadConfig(scope)
-	if err == nil {
-		if path := cfg.Raw.Section("core").Option("excludesfile"); path != "" {
-			return path, nil
-		}
+	paths, err := gitConfigPaths(scope)
+	if err != nil {
+		return "", err
 	}
-
-	paths, pathsErr := gitconfig.Paths(scope)
-	if pathsErr != nil {
-		return "", pathsErr
-	}
+	var selected string
 	for _, path := range paths {
 		excludePath, found, readErr := readCoreExcludeOption(path)
 		if errors.Is(readErr, os.ErrNotExist) {
@@ -174,10 +181,38 @@ func scopeExcludePath(scope gitconfig.Scope) (string, error) {
 			return "", readErr
 		}
 		if found {
-			return excludePath, nil
+			selected = excludePath
 		}
 	}
-	return "", nil
+	return selected, nil
+}
+
+func gitConfigPaths(scope gitconfig.Scope) ([]string, error) {
+	switch scope {
+	case gitconfig.SystemScope:
+		if os.Getenv("GIT_CONFIG_NOSYSTEM") != "" {
+			return nil, nil
+		}
+		if path := os.Getenv("GIT_CONFIG_SYSTEM"); path != "" {
+			return []string{path}, nil
+		}
+		return []string{"/etc/gitconfig"}, nil
+	case gitconfig.GlobalScope:
+		if path := os.Getenv("GIT_CONFIG_GLOBAL"); path != "" {
+			return []string{path}, nil
+		}
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return nil, err
+		}
+		configHome := os.Getenv("XDG_CONFIG_HOME")
+		if configHome == "" {
+			configHome = filepath.Join(home, ".config")
+		}
+		return []string{filepath.Join(configHome, "git", "config"), filepath.Join(home, ".gitconfig")}, nil
+	default:
+		return nil, fmt.Errorf("unsupported Git config scope %d", scope)
+	}
 }
 
 func readCoreExcludeOption(path string) (string, bool, error) {
@@ -197,7 +232,14 @@ func readCoreExcludeOption(path string) (string, bool, error) {
 		}
 		if strings.HasPrefix(line, "[") {
 			end := strings.IndexByte(line, ']')
-			inCore = end > 0 && strings.EqualFold(strings.TrimSpace(line[1:end]), "core")
+			section := ""
+			if end > 0 {
+				section = strings.TrimSpace(line[1:end])
+			}
+			if strings.EqualFold(section, "include") || strings.HasPrefix(strings.ToLower(section), "includeif ") {
+				return "", false, fmt.Errorf("Git config %q contains include directives", path)
+			}
+			inCore = strings.EqualFold(section, "core")
 			continue
 		}
 		if !inCore {
@@ -279,7 +321,7 @@ func repositoryExcludePatterns(repo *git.Repository) []gitignore.Pattern {
 }
 
 func (r *Repository) repoRelative(path string) (string, bool) {
-	rel, err := filepath.Rel(r.Root, path)
+	rel, err := filepath.Rel(r.resolvedRoot, path)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
 		return "", false
 	}
