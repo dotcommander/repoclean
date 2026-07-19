@@ -6,16 +6,6 @@ import (
 	"time"
 )
 
-// Enrich adds Git history intelligence to FileInfo entries.
-func Enrich(files []FileInfo, cfg Config) error {
-	repo, err := OpenRepository(cfg.Path)
-	if err != nil {
-		log.Printf("repoclean: repository history skipped: %v", err)
-		return nil
-	}
-	return EnrichRepository(files, cfg, repo)
-}
-
 // EnrichRepository enriches files with an already-opened repository view.
 // Read failures are warnings and never fabricate cleanup evidence.
 func EnrichRepository(files []FileInfo, cfg Config, repo *Repository) error {
@@ -44,22 +34,4 @@ func EnrichRepository(files []FileInfo, cfg Config, repo *Repository) error {
 		}
 	}
 	return nil
-}
-
-func allFileStaleness(cfg Config) (map[string]int, error) {
-	repo, err := OpenRepository(cfg.Path)
-	if err != nil || repo == nil {
-		return nil, err
-	}
-	stale, _, err := repo.history(time.Now())
-	return stale, err
-}
-
-func recentlyDeleted(cfg Config) (map[string]bool, error) {
-	repo, err := OpenRepository(cfg.Path)
-	if err != nil || repo == nil {
-		return nil, err
-	}
-	_, deleted, err := repo.history(time.Now())
-	return deleted, err
 }

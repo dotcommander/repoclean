@@ -3,7 +3,7 @@ package cleanup
 import "fmt"
 
 // EmitFindings converts enriched FileInfo fields into normalized findings.
-// Call after Walk, Enrich, Classify, and FindDuplicates.
+// Call after WalkRepository, EnrichRepository, Classify, and FindDuplicates.
 func EmitFindings(files []FileInfo) {
 	for i := range files {
 		f := &files[i]

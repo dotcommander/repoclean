@@ -21,20 +21,6 @@ var skipDirs = map[string]bool{
 // Detected during walk and skipped from results in post-processing.
 // We can't skip during WalkDir because .git is seen after the parent.
 
-// Walk returns enriched FileInfo entries for all files and selected directories
-// under cfg.Path up to cfg.MaxDepth levels deep.
-func Walk(cfg Config) ([]FileInfo, error) {
-	repo, err := OpenRepository(cfg.Path)
-	if err != nil {
-		log.Printf("repoclean: repository metadata skipped: %v", err)
-	}
-	files, walkErr := WalkRepository(cfg, repo)
-	if err != nil {
-		MarkRepositoryStateUnknown(files)
-	}
-	return files, walkErr
-}
-
 // WalkRepository walks using an already-opened repository view.
 func WalkRepository(cfg Config, repo *Repository) ([]FileInfo, error) {
 	root := cfg.Path
