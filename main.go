@@ -22,6 +22,9 @@ func main() {
 	confirm := flag.Bool("confirm", false, "actually execute commands (requires --apply)")
 	missing := flag.Bool("missing", false, "check repo completeness (missing LICENSE, CI, etc.)")
 	flag.Parse()
+	if flag.NArg() > 0 {
+		log.Fatalf("repoclean: unexpected argument %q", flag.Arg(0))
+	}
 
 	absPath, err := filepath.Abs(*path)
 	if err != nil {

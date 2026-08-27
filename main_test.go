@@ -42,6 +42,20 @@ func TestScanDoesNotRequireGitExecutable(t *testing.T) {
 	}
 }
 
+func TestRejectsPositionalArguments(t *testing.T) {
+	t.Parallel()
+
+	bin := buildRepocleanBinary(t)
+	cmd := exec.Command(bin, "completion")
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("completion unexpectedly succeeded:\n%s", out)
+	}
+	if !strings.Contains(string(out), `repoclean: unexpected argument "completion"`) {
+		t.Fatalf("completion output = %q, want unexpected-argument diagnostic", out)
+	}
+}
+
 func buildRepocleanBinary(t *testing.T) string {
 	t.Helper()
 	tmp := t.TempDir()
