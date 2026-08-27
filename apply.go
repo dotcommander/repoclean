@@ -204,9 +204,11 @@ func collectTargets(cmds []cleanupCmd) []string {
 			continue
 		}
 		if c.Kind == actionMove {
-			if !seen[c.Source] {
-				paths = append(paths, c.Source)
-				seen[c.Source] = true
+			for _, path := range []string{c.Source, c.Target} {
+				if path != "" && !seen[path] {
+					paths = append(paths, path)
+					seen[path] = true
+				}
 			}
 			continue
 		}
@@ -245,11 +247,11 @@ func collectTargets(cmds []cleanupCmd) []string {
 	return paths
 }
 
-func createBackup(dir string, targets []string) (string, error) {
+func createBackup(dir string, targets []string) (string, int, error) {
 	ts := time.Now().Format("20060102-150405")
 	backupDir := filepath.Join(dir, ".work", "archive")
 	if err := os.MkdirAll(backupDir, 0o755); err != nil {
-		return "", fmt.Errorf("create backup dir: %w", err)
+		return "", 0, fmt.Errorf("create backup dir: %w", err)
 	}
 	tarPath := filepath.Join(backupDir, "pre-cleanup-"+ts+".tar.gz")
 
@@ -265,12 +267,12 @@ func createBackup(dir string, targets []string) (string, error) {
 		}
 	}
 	if len(existing) == 0 {
-		return "", nil
+		return "", 0, nil
 	}
 
 	out, err := os.Create(tarPath)
 	if err != nil {
-		return "", fmt.Errorf("create backup: %w", err)
+		return "", 0, fmt.Errorf("create backup: %w", err)
 	}
 	gz := gzip.NewWriter(out)
 	tw := tar.NewWriter(gz)
@@ -279,19 +281,19 @@ func createBackup(dir string, targets []string) (string, error) {
 			tw.Close()
 			gz.Close()
 			out.Close()
-			return "", err
+			return "", 0, err
 		}
 	}
 	if err := tw.Close(); err != nil {
-		return "", fmt.Errorf("finish backup tar: %w", err)
+		return "", 0, fmt.Errorf("finish backup tar: %w", err)
 	}
 	if err := gz.Close(); err != nil {
-		return "", fmt.Errorf("finish backup gzip: %w", err)
+		return "", 0, fmt.Errorf("finish backup gzip: %w", err)
 	}
 	if err := out.Close(); err != nil {
-		return "", fmt.Errorf("close backup: %w", err)
+		return "", 0, fmt.Errorf("close backup: %w", err)
 	}
-	return tarPath, nil
+	return tarPath, len(existing), nil
 }
 
 func addBackupPath(tw *tar.Writer, root, name string) error {
@@ -368,10 +370,14 @@ func executeAction(c cleanupCmd, dir string) ([]byte, error) {
 }
 
 func runCommands(cmds []cleanupCmd, dir string) error {
+	return runCommandsTo(os.Stdout, cmds, dir)
+}
+
+func runCommandsTo(w io.Writer, cmds []cleanupCmd, dir string) error {
 	// Back up all files that will be touched.
 	targets := collectTargets(cmds)
 	if len(targets) > 0 {
-		tarPath, err := createBackup(dir, targets)
+		tarPath, backedUp, err := createBackup(dir, targets)
 		if err != nil {
 			return fmt.Errorf("backup failed: %w", err)
 		}
@@ -380,17 +386,17 @@ func runCommands(cmds []cleanupCmd, dir string) error {
 			if rel == "" {
 				rel = tarPath
 			}
-			fmt.Printf("backup: %s (%d files)\n\n", rel, len(targets))
+			fmt.Fprintf(w, "backup: %s (%d files)\n\n", rel, backedUp)
 		}
 	}
 
-	var executed, skipped, failed int
+	var executed, skipped, failed, notRun int
 	lastCat := ""
 
-	for _, c := range cmds {
+	for n, c := range cmds {
 		if c.Category != lastCat {
 			if lastCat != "" {
-				fmt.Println()
+				fmt.Fprintln(w)
 			}
 			lastCat = c.Category
 		}
@@ -398,26 +404,32 @@ func runCommands(cmds []cleanupCmd, dir string) error {
 		display := strings.Join(c.Args, " ")
 
 		if c.Comment {
-			fmt.Printf("  # %s\n", display)
+			fmt.Fprintf(w, "  # %s\n", display)
 			skipped++
 			continue
 		}
 
-		fmt.Printf("  %s", display)
+		fmt.Fprintf(w, "  %s", display)
 		out, err := executeAction(c, dir)
 		if err != nil {
-			fmt.Printf(" FAIL: %v\n", err)
+			fmt.Fprintf(w, " FAIL: %v\n", err)
 			if len(out) > 0 {
-				fmt.Printf("    %s\n", strings.TrimSpace(string(out)))
+				fmt.Fprintf(w, "    %s\n", strings.TrimSpace(string(out)))
 			}
 			failed++
+			for _, pending := range cmds[n+1:] {
+				if !pending.Comment {
+					notRun++
+				}
+			}
+			break
 		} else {
-			fmt.Println(" ok")
+			fmt.Fprintln(w, " ok")
 			executed++
 		}
 	}
 
-	fmt.Printf("\ndone: %d executed, %d skipped, %d failed\n", executed, skipped, failed)
+	fmt.Fprintf(w, "\ndone: %d executed, %d skipped, %d failed, %d not run\n", executed, skipped, failed, notRun)
 	if failed > 0 {
 		return fmt.Errorf("%d command(s) failed", failed)
 	}
